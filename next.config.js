@@ -12,6 +12,15 @@ const nextConfig = {
     }
     return config;
   },
+  experimental: {
+    outputFileTracingIncludes: {
+      '/api/**/*': [
+        './node_modules/sql.js/dist/sql-wasm.wasm',
+        './public/sql-wasm.wasm',
+        './src/lib/schema.sql',
+      ],
+    },
+  },
 };
 
 module.exports = nextConfig;

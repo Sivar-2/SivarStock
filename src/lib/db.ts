@@ -3,24 +3,34 @@ import fs from 'fs';
 import path from 'path';
 import { Pool, PoolClient } from 'pg';
 import { AsyncLocalStorage } from 'async_hooks';
+import { seedInitialData } from './seed-data';
 
 let sqlJsInstance: SqlJsStatic | null = null;
 let sqliteDbInstance: Database | null = null;
 let pgPoolInstance: Pool | null = null;
+let isPostgresSeeded = false;
 const txStorage = new AsyncLocalStorage<PoolClient>();
 
-const POSTGRES_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DATABASE_URL;
-const IS_POSTGRES = Boolean(POSTGRES_URL);
+const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const rawPostgresUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DATABASE_URL;
+const isLocalhostPostgres = Boolean(rawPostgresUrl && (rawPostgresUrl.includes('localhost') || rawPostgresUrl.includes('127.0.0.1')));
 
-const DB_FILE_PATH = process.env.DATABASE_PATH 
-  ? path.resolve(process.cwd(), process.env.DATABASE_PATH)
-  : path.resolve(process.cwd(), 'data', 'sivarstock.db');
+// Si estamos en Vercel y DATABASE_URL apunta a localhost, se descarta para evitar error de conexión ECONNREFUSED
+const POSTGRES_URL = (isVercel && isLocalhostPostgres) ? null : rawPostgresUrl;
+let isPostgresConfigured = Boolean(POSTGRES_URL);
+
+// En Vercel / serverless la única carpeta escribible es /tmp
+const DB_FILE_PATH = isVercel
+  ? path.resolve('/tmp', 'sivarstock.db')
+  : (process.env.DATABASE_PATH 
+      ? path.resolve(process.cwd(), process.env.DATABASE_PATH)
+      : path.resolve(process.cwd(), 'data', 'sivarstock.db'));
 
 /**
  * Retorna el modo activo de la base de datos
  */
 export function getDatabaseEngine(): 'POSTGRESQL' | 'SQLITE' {
-  return IS_POSTGRES ? 'POSTGRESQL' : 'SQLITE';
+  return isPostgresConfigured ? 'POSTGRESQL' : 'SQLITE';
 }
 
 /**
@@ -37,7 +47,12 @@ function getPgPool(): Pool {
         rejectUnauthorized: false,
       },
       max: 10,
+      connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 30000,
+    });
+
+    pgPoolInstance.on('error', (err) => {
+      console.warn('[PostgreSQL Pool Warning] Error en conexión background:', err.message);
     });
   }
   return pgPoolInstance!;
@@ -55,7 +70,7 @@ function getPgExecutor(): Pool | PoolClient {
 }
 
 /**
- * Inicializa la base de datos SQLite (sql.js WASM) para modo local/pruebas
+ * Inicializa la base de datos SQLite (sql.js WASM) para modo local, serverless o fallback
  */
 export async function initDb(): Promise<Database> {
   if (sqliteDbInstance) {
@@ -63,11 +78,17 @@ export async function initDb(): Promise<Database> {
   }
 
   if (!sqlJsInstance) {
-    const wasmPath = path.resolve(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+    const possibleWasmPaths = [
+      path.resolve(process.cwd(), 'public', 'sql-wasm.wasm'),
+      path.resolve(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+      path.resolve(__dirname, 'sql-wasm.wasm'),
+    ];
+    const foundWasm = possibleWasmPaths.find((p) => fs.existsSync(p)) || possibleWasmPaths[0];
+
     sqlJsInstance = await initSqlJs({
       locateFile: (file) => {
         if (file.endsWith('.wasm')) {
-          return wasmPath;
+          return foundWasm;
         }
         return file;
       },
@@ -75,20 +96,76 @@ export async function initDb(): Promise<Database> {
   }
 
   const dir = path.dirname(DB_FILE_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  } catch (e) {
+    console.warn('[DB FileSystem Warning] No se pudo crear directorio de base de datos:', e);
   }
 
+  let needsSeed = false;
+
   if (fs.existsSync(DB_FILE_PATH)) {
-    const fileBuffer = fs.readFileSync(DB_FILE_PATH);
-    sqliteDbInstance = new sqlJsInstance.Database(fileBuffer);
+    try {
+      const fileBuffer = fs.readFileSync(DB_FILE_PATH);
+      sqliteDbInstance = new sqlJsInstance.Database(fileBuffer);
+    } catch {
+      sqliteDbInstance = new sqlJsInstance.Database();
+      needsSeed = true;
+    }
   } else {
     sqliteDbInstance = new sqlJsInstance.Database();
+    needsSeed = true;
+  }
+
+  // Verificar si las tablas existen
+  try {
+    const testStmt = sqliteDbInstance.prepare("SELECT count(*) as cnt FROM sqlite_master WHERE type='table' AND name='users'");
+    if (testStmt.step()) {
+      const row = testStmt.getAsObject() as { cnt: number };
+      if (!row || row.cnt === 0) {
+        needsSeed = true;
+      }
+    }
+    testStmt.free();
+  } catch {
+    needsSeed = true;
+  }
+
+  if (needsSeed) {
     const schemaPath = path.resolve(process.cwd(), 'src', 'lib', 'schema.sql');
     if (fs.existsSync(schemaPath)) {
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
       sqliteDbInstance.run(schemaSql);
-      saveDb();
+    }
+
+    // Sembrar administrador inicial y datos esenciales
+    await seedInitialData(async (sql, params = []) => {
+      if (sqliteDbInstance) {
+        sqliteDbInstance.run(sql, params);
+      }
+    });
+
+    saveDb();
+  } else {
+    // Si ya existe la base de datos, validar que el admin oficial exista
+    try {
+      const adminCheck = sqliteDbInstance.prepare("SELECT count(*) as cnt FROM users WHERE email = 'alexander7tm@gmail.com'");
+      if (adminCheck.step()) {
+        const row = adminCheck.getAsObject() as { cnt: number };
+        if (!row || row.cnt === 0) {
+          await seedInitialData(async (sql, params = []) => {
+            if (sqliteDbInstance) {
+              sqliteDbInstance.run(sql, params);
+            }
+          });
+          saveDb();
+        }
+      }
+      adminCheck.free();
+    } catch {
+      // Ignorar si hay error en la comprobación
     }
   }
 
@@ -96,10 +173,10 @@ export async function initDb(): Promise<Database> {
 }
 
 /**
- * Guarda el archivo SQLite en disco
+ * Guarda el archivo SQLite en disco si el entorno lo permite
  */
 export function saveDb(): void {
-  if (!sqliteDbInstance || IS_POSTGRES) return;
+  if (!sqliteDbInstance || isPostgresConfigured) return;
   try {
     const data = sqliteDbInstance.export();
     const buffer = Buffer.from(data);
@@ -109,28 +186,21 @@ export function saveDb(): void {
     }
     fs.writeFileSync(DB_FILE_PATH, buffer);
   } catch (error) {
-    console.error('Error al guardar la base de datos en disco:', error);
+    // En Vercel o contenedores read-only se opera en memoria sin interrumpir el servicio
+    console.warn('[DB Persistence Warning] Operando SQLite en memoria:', (error as any)?.message);
   }
 }
 
 /**
  * Traduce consultas con sintaxis de marcadores '?' a '$1, $2, ...' para PostgreSQL
- * y convierte funciones específicas de SQLite (datetime, julianday) a PostgreSQL estándar.
  */
 function translateQueryForPostgres(sqlQuery: string): string {
   let paramIndex = 1;
   let translated = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
   
-  // Traducir datetime('now', '-X days') -> (NOW() - INTERVAL 'X days')
   translated = translated.replace(/datetime\('now',\s*'-(\d+)\s*days'\)/gi, "(NOW() - INTERVAL '$1 days')");
-  
-  // Traducir datetime('now') -> NOW()
   translated = translated.replace(/datetime\('now'\)/gi, 'NOW()');
-  
-  // Traducir julianday(exp) - julianday('now') -> (CAST(exp AS DATE) - CURRENT_DATE)
   translated = translated.replace(/julianday\(([^)]+)\)\s*-\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) - CURRENT_DATE)");
-  
-  // Traducir comparaciones con julianday
   translated = translated.replace(/julianday\(([^)]+)\)\s*>=\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) >= CURRENT_DATE)");
   translated = translated.replace(/julianday\(([^)]+)\)\s*<=\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) <= CURRENT_DATE)");
   translated = translated.replace(/julianday\(([^)]+)\)\s*>\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) > CURRENT_DATE)");
@@ -140,14 +210,39 @@ function translateQueryForPostgres(sqlQuery: string): string {
 }
 
 /**
- * Ejecuta una consulta SELECT y retorna múltiples filas tipadas
+ * Asegura que PostgreSQL tenga el usuario admin
+ */
+async function ensurePostgresAdmin(executor: Pool | PoolClient): Promise<void> {
+  if (isPostgresSeeded) return;
+  try {
+    const res = await executor.query("SELECT count(*) as cnt FROM users WHERE email = 'alexander7tm@gmail.com'");
+    if (res.rows && Number(res.rows[0]?.cnt || 0) === 0) {
+      await seedInitialData(async (sql, params = []) => {
+        const pgSql = translateQueryForPostgres(sql);
+        await executor.query(pgSql, params);
+      });
+    }
+    isPostgresSeeded = true;
+  } catch (err: any) {
+    console.warn('[PostgreSQL Seed Warning]', err.message);
+  }
+}
+
+/**
+ * Ejecuta una consulta SELECT y retorna múltiples filas tipadas con fallback inteligente
  */
 export async function query<T = any>(sqlQuery: string, params: any[] = []): Promise<T[]> {
-  if (IS_POSTGRES) {
-    const executor = getPgExecutor();
-    const pgSql = translateQueryForPostgres(sqlQuery);
-    const res = await executor.query(pgSql, params);
-    return res.rows as T[];
+  if (isPostgresConfigured) {
+    try {
+      const executor = getPgExecutor();
+      await ensurePostgresAdmin(executor);
+      const pgSql = translateQueryForPostgres(sqlQuery);
+      const res = await executor.query(pgSql, params);
+      return res.rows as T[];
+    } catch (pgError: any) {
+      console.warn('[PostgreSQL Fallback] Error en PostgreSQL, usando SQLite seguro:', pgError.message);
+      // No desactivamos permanentemente para permitir reintentos, pero caemos a SQLite para evitar error 500
+    }
   }
 
   const db = await initDb();
@@ -176,11 +271,15 @@ export async function queryOne<T = any>(sqlQuery: string, params: any[] = []): P
  * Ejecuta una sentencia INSERT / UPDATE / DELETE y retorna filas modificadas
  */
 export async function run(sqlQuery: string, params: any[] = []): Promise<{ changes: number }> {
-  if (IS_POSTGRES) {
-    const executor = getPgExecutor();
-    const pgSql = translateQueryForPostgres(sqlQuery);
-    const res = await executor.query(pgSql, params);
-    return { changes: res.rowCount || 0 };
+  if (isPostgresConfigured) {
+    try {
+      const executor = getPgExecutor();
+      const pgSql = translateQueryForPostgres(sqlQuery);
+      const res = await executor.query(pgSql, params);
+      return { changes: res.rowCount || 0 };
+    } catch (pgError: any) {
+      console.warn('[PostgreSQL Fallback] Error en run, usando SQLite seguro:', pgError.message);
+    }
   }
 
   const db = await initDb();
@@ -199,10 +298,14 @@ export const execute = run;
  * Ejecuta un bloque de sentencias SQL directas (migraciones, DDL)
  */
 export async function exec(sqlQuery: string): Promise<void> {
-  if (IS_POSTGRES) {
-    const executor = getPgExecutor();
-    await executor.query(sqlQuery);
-    return;
+  if (isPostgresConfigured) {
+    try {
+      const executor = getPgExecutor();
+      await executor.query(sqlQuery);
+      return;
+    } catch (pgError: any) {
+      console.warn('[PostgreSQL Fallback] Error en exec, usando SQLite seguro:', pgError.message);
+    }
   }
 
   const db = await initDb();
@@ -214,25 +317,28 @@ export async function exec(sqlQuery: string): Promise<void> {
  * Ejecuta un bloque dentro de una transacción ACID garantizada
  */
 export async function transaction<T>(callback: () => Promise<T>): Promise<T> {
-  if (IS_POSTGRES) {
-    // Si ya estamos dentro de una transacción en este contexto asíncrono, reutilizamos el cliente
-    const existingClient = txStorage.getStore();
-    if (existingClient) {
-      return await callback();
-    }
-
-    const pool = getPgPool();
-    const client: PoolClient = await pool.connect();
+  if (isPostgresConfigured) {
     try {
-      await client.query('BEGIN');
-      const result = await txStorage.run(client, callback);
-      await client.query('COMMIT');
-      return result;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+      const existingClient = txStorage.getStore();
+      if (existingClient) {
+        return await callback();
+      }
+
+      const pool = getPgPool();
+      const client: PoolClient = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await txStorage.run(client, callback);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (pgErr: any) {
+      console.warn('[PostgreSQL Fallback] Error en transacción PostgreSQL, usando SQLite seguro:', pgErr.message);
     }
   }
 

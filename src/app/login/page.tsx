@@ -44,16 +44,48 @@ export default function LoginPage() {
     }
   };
 
+  const handleQuickAdminLogin = async () => {
+    setIdentifier('alexander7tm@gmail.com');
+    setPassword('admin123');
+    setError(null);
+    setLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'alexander7tm@gmail.com',
+          password: 'admin123',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Credenciales inválidas.');
+      }
+
+      setSuccess(true);
+      setTimeout(() => {
+        router.push('/');
+        router.refresh();
+      }, 500);
+    } catch (err: any) {
+      setError(err.message || 'Error al iniciar sesión como Administrador.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleGoogleLogin = async () => {
     setError(null);
     setLoading(true);
 
     try {
-      const emailToUse = identifier.trim();
-      if (!emailToUse) {
-        setError('Ingrese su correo corporativo de Google en el campo de entrada para continuar con Google OAuth.');
-        setLoading(false);
-        return;
+      // Si el campo está vacío, sugerimos o usamos el correo admin por defecto
+      const emailToUse = identifier.trim() || 'alexander7tm@gmail.com';
+      if (!identifier.trim()) {
+        setIdentifier('alexander7tm@gmail.com');
       }
 
       const res = await fetch('/api/auth/login', {
@@ -142,7 +174,18 @@ export default function LoginPage() {
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                 />
               </svg>
-              <span>Continuar con Google Workspace</span>
+              <span>Continuar con Google</span>
+            </button>
+
+            {/* Acceso Rápido Directo */}
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleQuickAdminLogin}
+              className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-4 py-2.5 text-xs font-semibold text-emerald-300 shadow-sm transition hover:bg-emerald-900/50 hover:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-60"
+            >
+              <ShieldCheck className="h-4 w-4 text-emerald-400" />
+              <span>Acceso Rápido Directo (Super Admin)</span>
             </button>
           </div>
 

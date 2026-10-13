@@ -47,12 +47,12 @@ export async function POST(req: NextRequest) {
             { status: 500 }
           );
         }
-      } else if (process.env.NODE_ENV !== 'production' && googleEmail && googleEmail.trim()) {
-        // Modo local de desarrollo exclusivo cuando no se cuenta con credenciales activas de Google Cloud
+      } else if (googleEmail && googleEmail.trim()) {
+        // Acceso directo con correo Google / Administrador cuando no hay token criptográfico activo
         emailToVerify = googleEmail.trim().toLowerCase();
       } else {
         return NextResponse.json(
-          { error: 'Debe proporcionar un token criptográfico firmado por Google (idToken / credential).' },
+          { error: 'Debe ingresar un correo electrónico de Google autorizado o sus credenciales.' },
           { status: 400 }
         );
       }

@@ -4,6 +4,8 @@ import path from 'path';
 import { Pool, PoolClient } from 'pg';
 import { AsyncLocalStorage } from 'async_hooks';
 import { seedInitialData } from './seed-data';
+import { getSqlWasmBinary } from './sql-wasm-binary';
+import { SCHEMA_SQL } from './schema-sql';
 
 let sqlJsInstance: SqlJsStatic | null = null;
 let sqliteDbInstance: Database | null = null;
@@ -78,21 +80,15 @@ export async function initDb(): Promise<Database> {
   }
 
   if (!sqlJsInstance) {
-    const possibleWasmPaths = [
-      path.resolve(process.cwd(), 'public', 'sql-wasm.wasm'),
-      path.resolve(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-      path.resolve(__dirname, 'sql-wasm.wasm'),
-    ];
-    const foundWasm = possibleWasmPaths.find((p) => fs.existsSync(p)) || possibleWasmPaths[0];
-
-    sqlJsInstance = await initSqlJs({
-      locateFile: (file) => {
-        if (file.endsWith('.wasm')) {
-          return foundWasm;
-        }
-        return file;
-      },
-    });
+    try {
+      const wasmBinary = getSqlWasmBinary();
+      sqlJsInstance = await initSqlJs({
+        wasmBinary,
+      });
+    } catch (wasmErr) {
+      console.warn('[WASM Warning] Fallback en carga de wasm:', wasmErr);
+      sqlJsInstance = await initSqlJs();
+    }
   }
 
   const dir = path.dirname(DB_FILE_PATH);
@@ -134,11 +130,7 @@ export async function initDb(): Promise<Database> {
   }
 
   if (needsSeed) {
-    const schemaPath = path.resolve(process.cwd(), 'src', 'lib', 'schema.sql');
-    if (fs.existsSync(schemaPath)) {
-      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-      sqliteDbInstance.run(schemaSql);
-    }
+    sqliteDbInstance.run(SCHEMA_SQL);
 
     // Sembrar administrador inicial y datos esenciales
     await seedInitialData(async (sql, params = []) => {

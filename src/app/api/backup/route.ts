@@ -122,11 +122,83 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user || user.role !== 'ADMIN' || user.email !== 'alexander7tm@gmail.com') {
-      return NextResponse.json({ error: 'Solo el administrador principal (alexander7tm@gmail.com) puede restaurar respaldos.' }, { status: 403 });
+    if (!user || user.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Solo el administrador principal (ADMIN) puede realizar esta operación.' }, { status: 403 });
     }
 
     const backupData = await req.json();
+
+    // Acción para vaciar datos de prueba e iniciar inventario de cero
+    if (backupData && backupData.action === 'PURGE_ALL_DATA') {
+      const engine = getDatabaseEngine();
+
+      await transaction(async () => {
+        // En SQLite, deshabilitar triggers de inmutabilidad si existen
+        if (engine === 'SQLITE') {
+          await run('DROP TRIGGER IF EXISTS trg_audit_immutable_del').catch(() => {});
+          await run('DROP TRIGGER IF EXISTS trg_audit_immutable_upd').catch(() => {});
+        }
+
+        // 1. Limpiar bitácoras y registros dependientes respetando integridad referencial
+        await run('DELETE FROM audit_logs');
+        await run('DELETE FROM cost_records');
+        await run('DELETE FROM digital_services');
+        await run('DELETE FROM maintenance_records');
+        await run('DELETE FROM inventory_movements');
+        await run('DELETE FROM assignments');
+        await run('DELETE FROM consumable_stocks');
+        await run('DELETE FROM mobile_devices');
+        await run('DELETE FROM product_price_history');
+        await run('DELETE FROM product_suppliers');
+        await run('DELETE FROM inventory_items');
+        await run('DELETE FROM products');
+        
+        // Desvincular employee_id de users antes de borrar employees
+        await run('UPDATE users SET employee_id = NULL');
+        
+        // Conservar únicamente el usuario ADMIN actual
+        await run('DELETE FROM users WHERE id != ?', [user.id]);
+        
+        // Eliminar empleados de prueba
+        await run('DELETE FROM employees');
+
+        // Recrear triggers en SQLite si aplica
+        if (engine === 'SQLITE') {
+          await run(`
+            CREATE TRIGGER IF NOT EXISTS trg_audit_immutable_del
+            BEFORE DELETE ON audit_logs
+            BEGIN
+              SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (DELETE prohibido)');
+            END;
+          `).catch(() => {});
+          await run(`
+            CREATE TRIGGER IF NOT EXISTS trg_audit_immutable_upd
+            BEFORE UPDATE ON audit_logs
+            BEGIN
+              SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (UPDATE prohibido)');
+            END;
+          `).catch(() => {});
+        }
+      });
+
+      // Registrar el evento inaugural en audit_logs
+      await logAudit({
+        userId: user.id,
+        username: user.username,
+        userRole: user.role,
+        action: 'PURGA_TOTAL_DATOS_PRUEBA',
+        module: 'SISTEMA',
+        entityId: 'SYSTEM_PURGE',
+        entityName: 'Base de Datos de Producción',
+        reason: `Limpieza total de datos de prueba ejecutada por ${user.fullName} (${user.email}). Base de datos iniciada de cero conservando departamentos, categorías y administrador.`,
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: 'Base de datos de prueba purgada exitosamente. El inventario ha sido reiniciado a cero conservando departamentos, categorías y el usuario administrador.',
+      });
+    }
+
     if (!backupData || !backupData.data) {
       return NextResponse.json({ error: 'Formato de archivo de respaldo inválido.' }, { status: 400 });
     }

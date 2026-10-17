@@ -19,7 +19,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Shield,
-  Briefcase
+  Briefcase,
+  Archive
 } from 'lucide-react';
 
 export default function DepartamentosPage() {
@@ -246,9 +247,20 @@ export default function DepartamentosPage() {
     }
   };
 
-  const currentDeptEmployees = selectedDept
+  const [empFilterStatus, setEmpFilterStatus] = useState<'ACTIVO' | 'RETIRADO' | 'TODOS'>('ACTIVO');
+
+  const deptAllEmployees = selectedDept
     ? employees.filter((e) => e.department_id === selectedDept.id)
     : [];
+
+  const activeCount = deptAllEmployees.filter((e) => e.status === 'ACTIVO').length;
+  const retiredCount = deptAllEmployees.filter((e) => e.status === 'RETIRADO').length;
+
+  const currentDeptEmployees = deptAllEmployees.filter((e) => {
+    if (empFilterStatus === 'ACTIVO') return e.status === 'ACTIVO';
+    if (empFilterStatus === 'RETIRADO') return e.status === 'RETIRADO';
+    return true;
+  });
 
   const filteredDepts = departments.filter(
     (d) =>
@@ -392,9 +404,49 @@ export default function DepartamentosPage() {
 
                 {/* Lista de Empleados del departamento */}
                 <div className="mt-4">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
-                    Personal Asignado ({currentDeptEmployees.length})
-                  </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                      Personal ({currentDeptEmployees.length})
+                    </h3>
+
+                    {/* Filtros de Personal: Activo vs Archivados/Retirados */}
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEmpFilterStatus('ACTIVO')}
+                        className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition ${
+                          empFilterStatus === 'ACTIVO'
+                            ? 'bg-emerald-700 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Activos ({activeCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEmpFilterStatus('RETIRADO')}
+                        className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg font-semibold transition ${
+                          empFilterStatus === 'RETIRADO'
+                            ? 'bg-rose-700 text-white shadow-sm'
+                            : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
+                        }`}
+                      >
+                        <Archive className="h-3 w-3" />
+                        <span>📁 Archivados / Retirados ({retiredCount})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEmpFilterStatus('TODOS')}
+                        className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition ${
+                          empFilterStatus === 'TODOS'
+                            ? 'bg-military-800 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Todos ({deptAllEmployees.length})
+                      </button>
+                    </div>
+                  </div>
 
                   {currentDeptEmployees.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400">

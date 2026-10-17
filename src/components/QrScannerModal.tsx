@@ -1,60 +1,149 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Camera, AlertCircle, Search, ArrowRight } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import {
+  X,
+  Camera,
+  Search,
+  ArrowRight,
+  UserCheck,
+  ArrowLeftRight,
+  RotateCcw,
+  AlertTriangle,
+  CheckCircle2,
+  RefreshCw,
+  Package,
+  Building,
+  User,
+  Shield,
+  Clock,
+  Sparkles,
+  QrCode
+} from 'lucide-react';
 
 interface QrScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
+  currentUser?: {
+    role?: string;
+    canEdit?: boolean;
+    fullName?: string;
+    [key: string]: any;
+  } | null;
 }
 
-export default function QrScannerModal({ isOpen, onClose }: QrScannerModalProps) {
-  const router = useRouter();
+export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScannerModalProps) {
+  // Estados de cámara y búsqueda
   const [manualCode, setManualCode] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Estados de activo detectado
+  const [loadingAsset, setLoadingAsset] = useState(false);
+  const [assetData, setAssetData] = useState<any | null>(null);
+  const [productOnlyData, setProductOnlyData] = useState<any | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+
+  // Estados de acciones de ciclo de vida
+  const [activeAction, setActiveAction] = useState<'NONE' | 'ASSIGN' | 'SWAP' | 'RETURN' | 'DECOMMISSION' | 'REACTIVATE'>('NONE');
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Formularios de acciones
+  const [assignEmployeeId, setAssignEmployeeId] = useState('');
+  const [assignNotes, setAssignNotes] = useState('');
+
+  const [swapNewItemId, setSwapNewItemId] = useState('');
+  const [swapDestStatus, setSwapDestStatus] = useState<'AVERIADO' | 'EN_REVISION' | 'DADO_DE_BAJA' | 'DISPONIBLE'>('AVERIADO');
+  const [swapCondition, setSwapCondition] = useState('AVERIADO');
+  const [swapReason, setSwapReason] = useState('');
+
+  const [returnCondition, setReturnCondition] = useState('BUENO');
+  const [returnNotes, setReturnNotes] = useState('');
+
+  const [decommissionReason, setDecommissionReason] = useState('');
+  const [decommissionCondition, setDecommissionCondition] = useState('AVERIADO');
+
+  const [reactivateCondition, setReactivateCondition] = useState('BUENO');
+  const [reactivateEmployeeId, setReactivateEmployeeId] = useState('');
+  const [reactivateNotes, setReactivateNotes] = useState('');
+
+  // Puede editar: ADMIN o SUBADMIN con canEdit
+  const canPerformActions = Boolean(
+    currentUser?.role === 'ADMIN' ||
+    (currentUser?.role === 'SUBADMIN' && currentUser?.canEdit !== false)
+  );
 
   useEffect(() => {
     if (isOpen) {
       setCameraError(null);
+      setLookupError(null);
+      setAssetData(null);
+      setProductOnlyData(null);
+      setActiveAction('NONE');
       startCamera();
+      loadEmployees();
     } else {
       stopCamera();
     }
+
     return () => {
       stopCamera();
     };
   }, [isOpen]);
 
+  const loadEmployees = async () => {
+    try {
+      const res = await fetch('/api/employees?all=true');
+      const data = await res.json();
+      if (data.employees) {
+        setEmployees(data.employees.filter((e: any) => e.status === 'ACTIVO'));
+      }
+    } catch (err) {
+      console.warn('Error al cargar empleados:', err);
+    }
+  };
+
   const startCamera = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError('El navegador no soporta acceso a la cámara o requiere conexión HTTPS.');
+        setCameraError('El navegador no soporta acceso a la cámara o requiere HTTPS.');
         return;
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       });
+
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        videoRef.current.setAttribute('playsinline', 'true');
+        await videoRef.current.play();
         setIsCameraActive(true);
+        startBarcodeScanning();
       }
     } catch (err: any) {
       console.warn('Acceso a cámara no disponible:', err);
-      setCameraError(
-        'No se pudo acceder a la cámara. Asegúrese de otorgar permisos o use la búsqueda por código manual a continuación.'
-      );
+      setCameraError('Cámara trasera no accesible. Puede utilizar el buscador manual por código o serie abajo.');
       setIsCameraActive(false);
     }
   };
 
   const stopCamera = () => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -62,113 +151,904 @@ export default function QrScannerModal({ isOpen, onClose }: QrScannerModalProps)
     setIsCameraActive(false);
   };
 
-  const handleLookup = (code: string) => {
-    const clean = code.trim().toUpperCase();
-    if (clean) {
-      stopCamera();
-      onClose();
-      router.push(`/inventario?search=${encodeURIComponent(clean)}`);
+  // Motor de lectura con BarcodeDetector nativo
+  const startBarcodeScanning = () => {
+    if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+      try {
+        const barcodeDetector = new (window as any).BarcodeDetector({
+          formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'],
+        });
+
+        scanIntervalRef.current = setInterval(async () => {
+          if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+            try {
+              const barcodes = await barcodeDetector.detect(videoRef.current);
+              if (barcodes && barcodes.length > 0) {
+                const rawValue = barcodes[0].rawValue;
+                if (rawValue && rawValue.trim()) {
+                  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                    navigator.vibrate([40, 30, 40]);
+                  }
+                  handleLookupCode(rawValue.trim());
+                }
+              }
+            } catch {
+              // Detección en proceso
+            }
+          }
+        }, 350);
+      } catch (detectorErr) {
+        console.warn('BarcodeDetector no inicializable:', detectorErr);
+      }
+    }
+  };
+
+  const handleLookupCode = async (codeToSearch: string) => {
+    const clean = codeToSearch.trim();
+    if (!clean) return;
+
+    setLoadingAsset(true);
+    setLookupError(null);
+    setAssetData(null);
+    setProductOnlyData(null);
+    setActiveAction('NONE');
+    setActionSuccess(null);
+    setActionError(null);
+
+    // Pausar intervalo de escaneo mientras se inspecciona el activo
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+
+    try {
+      const res = await fetch(`/api/inventory/lifecycle?code=${encodeURIComponent(clean)}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || `No se encontró activo con el código "${clean}".`);
+      }
+
+      if (data.isProductOnly) {
+        setProductOnlyData(data.product);
+      } else {
+        setAssetData(data);
+        // Pre-cargar valores por defecto
+        if (data.item?.current_employee_id) {
+          setAssignEmployeeId(data.item.current_employee_id);
+        }
+      }
+    } catch (err: any) {
+      setLookupError(err.message || 'Error al consultar código.');
+      // Reanudar escáner si hubo error
+      startBarcodeScanning();
+    } finally {
+      setLoadingAsset(false);
+    }
+  };
+
+  const handleResetScan = () => {
+    setAssetData(null);
+    setProductOnlyData(null);
+    setLookupError(null);
+    setActionSuccess(null);
+    setActionError(null);
+    setActiveAction('NONE');
+    setManualCode('');
+    startBarcodeScanning();
+  };
+
+  // Ejecución de Ciclo de Vida
+  const executeLifecycleAction = async (actionType: string, payload: any) => {
+    setActionLoading(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const res = await fetch('/api/inventory/lifecycle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: actionType,
+          ...payload,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al ejecutar la acción.');
+      }
+
+      setActionSuccess(data.message || 'Operación completada exitosamente.');
+      setActiveAction('NONE');
+
+      // Recargar datos actualizados del activo
+      if (assetData?.item?.permanent_code) {
+        await handleLookupCode(assetData.item.permanent_code);
+      }
+    } catch (err: any) {
+      setActionError(err.message || 'Error al procesar la operación.');
+    } finally {
+      setActionLoading(false);
     }
   };
 
   if (!isOpen) return null;
 
+  const item = assetData?.item;
+  const activeAssignment = assetData?.activeAssignment;
+  const availableSwaps = assetData?.availableSwaps || [];
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden">
-        {/* Encabezado */}
-        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-5 py-4">
-          <div className="flex items-center gap-2">
-            <Camera className="h-5 w-5 text-military-700" />
-            <h3 className="text-base font-bold text-slate-800">Escanear Etiqueta QR</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4 backdrop-blur-md overflow-y-auto">
+      <div className="w-full max-w-xl rounded-3xl bg-military-950 border border-military-800 text-slate-100 shadow-2xl overflow-hidden my-auto flex flex-col max-h-[95vh]">
+        {/* Encabezado Corporativo */}
+        <div className="flex items-center justify-between border-b border-military-800/80 bg-military-900 px-5 py-4">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-military-800 border border-military-700/60 text-emerald-400">
+              <Camera className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black tracking-wide text-white flex items-center gap-2">
+                <span>Centro de Escaneo QR & Ciclo de Vida</span>
+              </h3>
+              <p className="text-[11px] text-military-300 font-mono">
+                SivarStock Asset Lifecycle v2.5
+              </p>
+            </div>
           </div>
           <button
             onClick={() => {
               stopCamera();
               onClose();
             }}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+            className="rounded-xl p-2 text-military-300 hover:bg-military-800 hover:text-white transition"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="p-5">
-          {/* Vista previa de Cámara */}
-          <div className="relative mb-4 flex h-56 w-full flex-col items-center justify-center rounded-xl bg-slate-900 overflow-hidden">
-            {isCameraActive ? (
-              <>
-                <video
-                  ref={videoRef}
-                  className="h-full w-full object-cover"
-                  playsInline
-                  autoPlay
-                />
-                {/* Marco de enfoque */}
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <div className="h-36 w-36 rounded-lg border-2 border-dashed border-emerald-400 bg-emerald-400/10" />
-                </div>
-              </>
-            ) : (
-              <div className="px-6 text-center text-slate-300">
-                <Camera className="mx-auto mb-2 h-10 w-10 text-slate-500" />
-                <p className="text-xs text-slate-400">
-                  {cameraError || 'Iniciando cámara del dispositivo...'}
-                </p>
+        {/* Cuerpo del Modal */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+          {/* Si no hay activo seleccionado: Cámara + Buscador manual */}
+          {!assetData && !productOnlyData && (
+            <>
+              {/* Visor de Cámara */}
+              <div className="relative flex h-60 sm:h-72 w-full flex-col items-center justify-center rounded-2xl bg-black border border-military-800 overflow-hidden shadow-inner">
+                {isCameraActive ? (
+                  <>
+                    <video
+                      ref={videoRef}
+                      className="h-full w-full object-cover"
+                      playsInline
+                      autoPlay
+                      muted
+                    />
+                    {/* Retícula de enfoque militar */}
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                      <div className="relative h-44 w-44 rounded-2xl border-2 border-emerald-400/80 bg-emerald-500/10 shadow-[0_0_25px_rgba(16,185,129,0.3)] animate-pulse">
+                        <div className="absolute top-2 left-2 h-4 w-4 border-t-2 border-l-2 border-emerald-300" />
+                        <div className="absolute top-2 right-2 h-4 w-4 border-t-2 border-r-2 border-emerald-300" />
+                        <div className="absolute bottom-2 left-2 h-4 w-4 border-b-2 border-l-2 border-emerald-300" />
+                        <div className="absolute bottom-2 right-2 h-4 w-4 border-b-2 border-r-2 border-emerald-300" />
+                        <span className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] font-mono tracking-wider font-bold text-emerald-400 uppercase whitespace-nowrap bg-military-950/90 px-2 py-0.5 rounded border border-emerald-500/40">
+                          Alinee código QR / Barra
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="px-6 text-center text-military-300">
+                    <QrCode className="mx-auto mb-3 h-12 w-12 text-military-600 animate-pulse" />
+                    <p className="text-xs font-medium text-military-300">
+                      {cameraError || 'Iniciando cámara trasera de alta resolución...'}
+                    </p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {cameraError && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800 border border-amber-200">
-              <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
-              <span>{cameraError}</span>
+              {cameraError && (
+                <div className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-200">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+                  <span>{cameraError}</span>
+                </div>
+              )}
+
+              {/* Buscador Manual de Códigos con Autocompletado */}
+              <div className="rounded-2xl border border-military-800 bg-military-900/60 p-4">
+                <label className="block text-xs font-bold text-military-200 mb-2 uppercase tracking-wider">
+                  Búsqueda directa por Código Permanente o Serie:
+                </label>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleLookupCode(manualCode);
+                  }}
+                  className="flex gap-2"
+                >
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-military-400" />
+                    <input
+                      type="text"
+                      placeholder="ej. SIV-IT-000001, EMP-001 o N° de Serie"
+                      value={manualCode}
+                      onChange={(e) => setManualCode(e.target.value)}
+                      className="w-full rounded-xl border border-military-700 bg-military-950 py-2.5 pl-10 pr-3 text-xs sm:text-sm text-white placeholder-military-500 uppercase font-mono tracking-wider focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!manualCode.trim() || loadingAsset}
+                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 transition disabled:opacity-50"
+                  >
+                    {loadingAsset ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <span>Buscar</span>
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+
+              {lookupError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 p-3.5 text-xs text-rose-300 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+                  <span>{lookupError}</span>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Si detectó un Producto General (Catálogo) */}
+          {productOnlyData && (
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-military-800 bg-military-900 p-5">
+                <div className="flex items-center justify-between pb-3 border-b border-military-800">
+                  <span className="text-xs font-mono font-bold text-emerald-400">
+                    CÓDIGO DE PRODUCTO MAESTRO: {productOnlyData.code}
+                  </span>
+                  <button
+                    onClick={handleResetScan}
+                    className="text-xs text-military-300 hover:text-white flex items-center gap-1"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>Escanear Otro</span>
+                  </button>
+                </div>
+                <h4 className="text-lg font-black text-white mt-2">{productOnlyData.name}</h4>
+                <p className="text-xs text-military-300 mt-1">{productOnlyData.description || 'Sin descripción adicional'}</p>
+                <div className="grid grid-cols-2 gap-3 mt-4 text-xs font-mono">
+                  <div className="p-3 rounded-xl bg-military-950 border border-military-800">
+                    <span className="text-military-400 block text-[10px]">Stock General:</span>
+                    <span className="text-base font-bold text-emerald-400">
+                      {productOnlyData.current_stock} {productOnlyData.unit_of_measure}s
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-military-950 border border-military-800">
+                    <span className="text-military-400 block text-[10px]">Precio Unitario:</span>
+                    <span className="text-base font-bold text-emerald-400">
+                      Q{productOnlyData.unit_price}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
-          {/* Búsqueda manual alternativa */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              O introduzca el código del activo manualmente:
-            </label>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleLookup(manualCode);
-              }}
-              className="flex gap-2"
-            >
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="ej. SIV-IT-000001 o AM-2026-CBLE-001"
-                  value={manualCode}
-                  onChange={(e) => setManualCode(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs sm:text-sm text-slate-800 uppercase focus:border-military-600 focus:outline-none focus:ring-1 focus:ring-military-600"
-                />
+          {/* Tarjeta de Identidad del Activo Detectado */}
+          {assetData && item && (
+            <div className="space-y-4">
+              {/* Botón Volver a Escanear */}
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-military-400">
+                  Activo Físico Identificado
+                </span>
+                <button
+                  onClick={handleResetScan}
+                  className="flex items-center gap-1 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Escanear Otro Activo</span>
+                </button>
               </div>
-              <button
-                type="submit"
-                disabled={!manualCode.trim()}
-                className="flex items-center gap-1 rounded-lg bg-military-800 px-4 py-2 text-xs font-semibold text-white transition hover:bg-military-900 disabled:opacity-50"
-              >
-                <span>Buscar</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
-            </form>
-          </div>
+
+              {/* Mensajes de Resultado de Acción */}
+              {actionSuccess && (
+                <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/40 p-3 text-xs text-emerald-300 flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                  <span>{actionSuccess}</span>
+                </div>
+              )}
+              {actionError && (
+                <div className="rounded-xl bg-rose-500/15 border border-rose-500/40 p-3 text-xs text-rose-300 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+                  <span>{actionError}</span>
+                </div>
+              )}
+
+              {/* Tarjeta Principal de Identidad */}
+              <div className="rounded-2xl border border-military-800 bg-military-900/90 p-5 space-y-4 shadow-xl">
+                {/* Cabecera del Activo */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-base font-black tracking-wider text-emerald-400 bg-military-950 px-2.5 py-1 rounded-lg border border-military-800">
+                        {item.permanent_code}
+                      </span>
+                      {/* Badge de Estado Operativo */}
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold border ${
+                          item.operational_status === 'DISPONIBLE'
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : item.operational_status === 'ASIGNADO'
+                            ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                            : item.operational_status === 'AVERIADO'
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                        }`}
+                      >
+                        {item.operational_status}
+                      </span>
+                      <span className="rounded-full bg-military-800 px-2 py-0.5 text-[10px] text-military-300 border border-military-700">
+                        Condición: {item.physical_condition || 'BUENO'}
+                      </span>
+                    </div>
+
+                    <h3 className="text-lg font-black text-white mt-2 leading-tight">
+                      {item.product_name}
+                    </h3>
+                    <p className="text-xs text-military-300 mt-0.5 font-mono">
+                      Categoría: {item.category_name} | {item.brand || item.product_brand || 'Genérico'} {item.model || item.product_model || ''}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Serie y Detalles Técnicos */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs font-mono">
+                  <div className="p-2.5 rounded-xl bg-military-950 border border-military-800/80">
+                    <span className="text-[10px] text-military-400 block uppercase">N° Serie:</span>
+                    <span className="font-bold text-white truncate block">
+                      {item.serial_number || 'SIN SERIE'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-military-950 border border-military-800/80">
+                    <span className="text-[10px] text-military-400 block uppercase">Ubicación Actual:</span>
+                    <span className="font-bold text-white truncate block">
+                      {item.department_name || 'Cuarto de Servidores (Bodega)'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-military-950 border border-military-800/80 col-span-2 sm:col-span-1">
+                    <span className="text-[10px] text-military-400 block uppercase">Código Producto:</span>
+                    <span className="font-bold text-emerald-400 truncate block">
+                      {item.product_code}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Bloque Destacado: PROPIETARIO / RESPONSABLE ACTUAL */}
+                <div className="rounded-2xl border border-military-700/80 bg-gradient-to-br from-military-950 to-military-900 p-4 shadow-md">
+                  <div className="flex items-center gap-2 mb-2">
+                    <User className="h-4 w-4 text-emerald-400" />
+                    <span className="text-xs font-black uppercase tracking-wider text-military-200">
+                      Custodio / Responsable Actual
+                    </span>
+                  </div>
+
+                  {item.employee_name ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-extrabold text-white">
+                          {item.employee_name}
+                        </span>
+                        <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-xs font-mono font-bold text-emerald-300 border border-emerald-500/30">
+                          {item.employee_code || 'EMP-ACTIVO'}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-military-300">
+                        {item.department_name && (
+                          <span>Área: <strong className="text-white">{item.department_name}</strong></span>
+                        )}
+                        {item.employee_email && (
+                          <span>Correo: <strong className="text-white">{item.employee_email}</strong></span>
+                        )}
+                      </div>
+                      {activeAssignment && (
+                        <div className="pt-2 mt-2 border-t border-military-800 flex items-center justify-between text-[11px] font-mono text-military-300">
+                          <span>Código Asignación: <strong className="text-emerald-400">{activeAssignment.assignment_code}</strong></span>
+                          <span>Fecha: {new Date(activeAssignment.assigned_at).toLocaleDateString('es-GT')}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="py-2 text-xs text-military-400 flex items-center gap-2">
+                      <Package className="h-4 w-4 text-emerald-500" />
+                      <span>Sin custodio asignado. El activo se encuentra resguardado en Bodega Central listo para asignación.</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Historial rápido de últimos movimientos */}
+                {assetData.recentMovements && assetData.recentMovements.length > 0 && (
+                  <div className="rounded-xl bg-military-950 p-3 border border-military-800 text-xs">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-military-400 block mb-2 flex items-center gap-1.5">
+                      <Clock className="h-3 w-3 text-emerald-400" />
+                      Últimos Movimientos del Activo:
+                    </span>
+                    <div className="space-y-1.5">
+                      {assetData.recentMovements.map((mov: any) => (
+                        <div key={mov.id} className="flex items-center justify-between text-[11px] text-military-300 border-b border-military-900 pb-1">
+                          <span className="font-bold text-emerald-300">{mov.movement_type}</span>
+                          <span className="truncate max-w-[200px] text-military-400">{mov.reason}</span>
+                          <span className="font-mono text-[10px] text-military-500">
+                            {new Date(mov.created_at).toLocaleDateString('es-GT')}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Botones de Acción de Ciclo de Vida (Sólo ADMIN y SUBADMIN) */}
+              {canPerformActions && (
+                <div className="rounded-2xl border border-military-800 bg-military-900 p-4 space-y-3">
+                  <span className="text-xs font-black uppercase tracking-wider text-military-300 block">
+                    Acciones de Ciclo de Vida en Vivo:
+                  </span>
+
+                  {/* Barra de botones según estado actual */}
+                  <div className="flex flex-wrap gap-2">
+                    {/* Botón Asignar (para DISPONIBLE) */}
+                    {item.operational_status === 'DISPONIBLE' && (
+                      <button
+                        onClick={() => setActiveAction(activeAction === 'ASSIGN' ? 'NONE' : 'ASSIGN')}
+                        className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-sm ${
+                          activeAction === 'ASSIGN'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-military-800 text-emerald-400 hover:bg-military-700'
+                        }`}
+                      >
+                        <UserCheck className="h-4 w-4" />
+                        <span>Asignar a Empleado</span>
+                      </button>
+                    )}
+
+                    {/* Botón Swap / Cambio por otro de bodega (para ASIGNADO) */}
+                    {item.operational_status === 'ASIGNADO' && (
+                      <button
+                        onClick={() => setActiveAction(activeAction === 'SWAP' ? 'NONE' : 'SWAP')}
+                        className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-sm ${
+                          activeAction === 'SWAP'
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-military-800 text-amber-400 hover:bg-military-700'
+                        }`}
+                      >
+                        <ArrowLeftRight className="h-4 w-4" />
+                        <span>Cambiar por Otro (Reemplazo)</span>
+                      </button>
+                    )}
+
+                    {/* Botón Devolver a Bodega (para ASIGNADO) */}
+                    {item.operational_status === 'ASIGNADO' && (
+                      <button
+                        onClick={() => setActiveAction(activeAction === 'RETURN' ? 'NONE' : 'RETURN')}
+                        className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-sm ${
+                          activeAction === 'RETURN'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-military-800 text-blue-400 hover:bg-military-700'
+                        }`}
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                        <span>Devolver a Bodega</span>
+                      </button>
+                    )}
+
+                    {/* Botón Dar de Baja (para cualquier estado activo) */}
+                    {item.operational_status !== 'DADO_DE_BAJA' && (
+                      <button
+                        onClick={() => setActiveAction(activeAction === 'DECOMMISSION' ? 'NONE' : 'DECOMMISSION')}
+                        className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-sm ${
+                          activeAction === 'DECOMMISSION'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-military-800 text-rose-400 hover:bg-military-700'
+                        }`}
+                      >
+                        <AlertTriangle className="h-4 w-4" />
+                        <span>Dar de Baja</span>
+                      </button>
+                    )}
+
+                    {/* Botón Reactivar (para DADO_DE_BAJA o AVERIADO) */}
+                    {(item.operational_status === 'DADO_DE_BAJA' || item.operational_status === 'AVERIADO' || item.operational_status === 'EN_REVISION') && (
+                      <button
+                        onClick={() => setActiveAction(activeAction === 'REACTIVATE' ? 'NONE' : 'REACTIVATE')}
+                        className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-sm ${
+                          activeAction === 'REACTIVATE'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-military-800 text-emerald-400 hover:bg-military-700'
+                        }`}
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        <span>Reactivar y Reasignar</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* FORMULARIO DINÁMICO EN VIVO */}
+                  {/* 1. Formulario ASSIGN */}
+                  {activeAction === 'ASSIGN' && (
+                    <div className="rounded-xl border border-emerald-500/40 bg-military-950 p-4 space-y-3">
+                      <h4 className="text-xs font-bold text-emerald-400 uppercase">
+                        Asignación Formal del Activo
+                      </h4>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Seleccionar Empleado Custodio *
+                        </label>
+                        <select
+                          value={assignEmployeeId}
+                          onChange={(e) => setAssignEmployeeId(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="">Seleccione un empleado...</option>
+                          {employees.map((e) => (
+                            <option key={e.id} value={e.id}>
+                              {e.employee_code} - {e.full_name} ({e.department_name || 'Sin área'})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Notas o Condiciones de Entrega
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ej. Entrega con cargador original y funda protectora"
+                          value={assignNotes}
+                          onChange={(e) => setAssignNotes(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setActiveAction('NONE')}
+                          className="px-3 py-1.5 text-xs text-military-400 hover:text-white"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={() =>
+                            executeLifecycleAction('ASSIGN', {
+                              itemId: item.id,
+                              employeeId: assignEmployeeId,
+                              notes: assignNotes,
+                            })
+                          }
+                          disabled={!assignEmployeeId || actionLoading}
+                          className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          {actionLoading ? 'Asignando...' : 'Confirmar Asignación'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 2. Formulario SWAP (Sustitución) */}
+                  {activeAction === 'SWAP' && (
+                    <div className="rounded-xl border border-amber-500/40 bg-military-950 p-4 space-y-3">
+                      <h4 className="text-xs font-bold text-amber-400 uppercase">
+                        Sustitución por Activo de Bodega
+                      </h4>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Seleccionar Equipo Sustituto de Bodega *
+                        </label>
+                        <select
+                          value={swapNewItemId}
+                          onChange={(e) => setSwapNewItemId(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white font-mono"
+                        >
+                          <option value="">Seleccione equipo disponible en bodega...</option>
+                          {availableSwaps.map((s: any) => (
+                            <option key={s.id} value={s.id}>
+                              {s.permanent_code} - {s.product_name} (Serie: {s.serial_number || 'S/N'})
+                            </option>
+                          ))}
+                        </select>
+                        {availableSwaps.length === 0 && (
+                          <span className="text-[11px] text-amber-400 block mt-1">
+                            No hay otros equipos disponibles en bodega de la categoría {item.category_name}.
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-bold text-military-300 mb-1">
+                            Destino del Equipo Anterior *
+                          </label>
+                          <select
+                            value={swapDestStatus}
+                            onChange={(e) => setSwapDestStatus(e.target.value as any)}
+                            className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                          >
+                            <option value="AVERIADO">Averiado / Para Reparación</option>
+                            <option value="EN_REVISION">En Revisión Técnica</option>
+                            <option value="DADO_DE_BAJA">Dado de Baja</option>
+                            <option value="DISPONIBLE">Disponible en Bodega</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-military-300 mb-1">
+                            Condición Física
+                          </label>
+                          <select
+                            value={swapCondition}
+                            onChange={(e) => setSwapCondition(e.target.value)}
+                            className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                          >
+                            <option value="AVERIADO">Averiado / Dañado</option>
+                            <option value="USADO">Usado Funcional</option>
+                            <option value="BUENO">Bueno</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Motivo del Cambio / Reemplazo *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ej. Falla en teclado y pantalla rota; se reemplaza por equipo de respaldo"
+                          value={swapReason}
+                          onChange={(e) => setSwapReason(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setActiveAction('NONE')}
+                          className="px-3 py-1.5 text-xs text-military-400 hover:text-white"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={() =>
+                            executeLifecycleAction('SWAP', {
+                              oldItemId: item.id,
+                              newItemId: swapNewItemId,
+                              employeeId: item.current_employee_id,
+                              oldItemDestinationStatus: swapDestStatus,
+                              oldItemCondition: swapCondition,
+                              reason: swapReason,
+                            })
+                          }
+                          disabled={!swapNewItemId || !swapReason.trim() || actionLoading}
+                          className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+                        >
+                          {actionLoading ? 'Sustituyendo...' : 'Confirmar Sustitución'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3. Formulario RETURN_TO_WAREHOUSE */}
+                  {activeAction === 'RETURN' && (
+                    <div className="rounded-xl border border-blue-500/40 bg-military-950 p-4 space-y-3">
+                      <h4 className="text-xs font-bold text-blue-400 uppercase">
+                        Devolución a Bodega Central
+                      </h4>
+                      <p className="text-xs text-military-300">
+                        El activo se desvinculará del custodio actual ({item.employee_name}) y pasará a estado DISPONIBLE en Bodega.
+                      </p>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Condición de Recepción Física *
+                        </label>
+                        <select
+                          value={returnCondition}
+                          onChange={(e) => setReturnCondition(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="BUENO">Bueno (Completo y funcional)</option>
+                          <option value="USADO">Usado (Signos de desgaste)</option>
+                          <option value="AVERIADO">Averiado (Requiere revisión)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Observaciones de Recepción
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ej. Recibido completo y probado en bodega"
+                          value={returnNotes}
+                          onChange={(e) => setReturnNotes(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setActiveAction('NONE')}
+                          className="px-3 py-1.5 text-xs text-military-400 hover:text-white"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={() =>
+                            executeLifecycleAction('RETURN_TO_WAREHOUSE', {
+                              itemId: item.id,
+                              condition: returnCondition,
+                              notes: returnNotes,
+                            })
+                          }
+                          disabled={actionLoading}
+                          className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+                        >
+                          {actionLoading ? 'Procesando...' : 'Confirmar Devolución'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 4. Formulario DECOMMISSION */}
+                  {activeAction === 'DECOMMISSION' && (
+                    <div className="rounded-xl border border-rose-500/40 bg-military-950 p-4 space-y-3">
+                      <h4 className="text-xs font-bold text-rose-400 uppercase">
+                        Dar de Baja Activo
+                      </h4>
+                      <p className="text-xs text-military-300">
+                        El activo se marcará como DADO_DE_BAJA y quedará archivado formalmente en el sistema. Si tenía un custodio, quedará liberado.
+                      </p>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Condición Física Final
+                        </label>
+                        <select
+                          value={decommissionCondition}
+                          onChange={(e) => setDecommissionCondition(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="AVERIADO">Averiado / Irreparable</option>
+                          <option value="DANADO">Dañado / Obsolescencia</option>
+                          <option value="USADO">Usado en desuso</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Motivo o Justificación Obligatoria de Baja *
+                        </label>
+                        <textarea
+                          rows={2}
+                          required
+                          placeholder="Ej. Tarjeta madre quemada por cortocircuito; costo de reparación supera valor residual."
+                          value={decommissionReason}
+                          onChange={(e) => setDecommissionReason(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 p-2 text-xs text-white focus:outline-none focus:border-rose-500"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setActiveAction('NONE')}
+                          className="px-3 py-1.5 text-xs text-military-400 hover:text-white"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={() =>
+                            executeLifecycleAction('DECOMMISSION', {
+                              itemId: item.id,
+                              reason: decommissionReason,
+                              condition: decommissionCondition,
+                            })
+                          }
+                          disabled={!decommissionReason.trim() || actionLoading}
+                          className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
+                        >
+                          {actionLoading ? 'Dando de baja...' : 'Confirmar Baja'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 5. Formulario REACTIVATE */}
+                  {activeAction === 'REACTIVATE' && (
+                    <div className="rounded-xl border border-emerald-500/40 bg-military-950 p-4 space-y-3">
+                      <h4 className="text-xs font-bold text-emerald-400 uppercase">
+                        Reactivar Activo Dado de Baja o Averiado
+                      </h4>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Nueva Condición Física *
+                        </label>
+                        <select
+                          value={reactivateCondition}
+                          onChange={(e) => setReactivateCondition(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="BUENO">Bueno (Reparado / Restaurado)</option>
+                          <option value="USADO">Usado Funcional</option>
+                          <option value="NUEVO">Nuevo</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Reasignar a Empleado Inmediatamente (Opcional)
+                        </label>
+                        <select
+                          value={reactivateEmployeeId}
+                          onChange={(e) => setReactivateEmployeeId(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="">Dejar como DISPONIBLE en Bodega Central</option>
+                          {employees.map((e) => (
+                            <option key={e.id} value={e.id}>
+                              Asignar a: {e.employee_code} - {e.full_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-military-300 mb-1">
+                          Notas de Reactivación
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ej. Se reemplazó módulo defectuoso; equipo 100% operativo"
+                          value={reactivateNotes}
+                          onChange={(e) => setReactivateNotes(e.target.value)}
+                          className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          onClick={() => setActiveAction('NONE')}
+                          className="px-3 py-1.5 text-xs text-military-400 hover:text-white"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={() =>
+                            executeLifecycleAction('REACTIVATE', {
+                              itemId: item.id,
+                              condition: reactivateCondition,
+                              assignToEmployeeId: reactivateEmployeeId || null,
+                              notes: reactivateNotes,
+                            })
+                          }
+                          disabled={actionLoading}
+                          className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          {actionLoading ? 'Reactivando...' : 'Confirmar Reactivación'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        <div className="border-t border-slate-100 bg-slate-50 px-5 py-3 text-right">
+        {/* Pie del Modal */}
+        <div className="border-t border-military-800 bg-military-900 px-5 py-3 flex items-center justify-between text-xs">
+          <span className="text-military-400 font-mono text-[11px]">
+            {canPerformActions ? 'Rol con permisos de edición activos' : 'Modo sólo lectura'}
+          </span>
           <button
             onClick={() => {
               stopCamera();
               onClose();
             }}
-            className="rounded-lg px-4 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+            className="rounded-xl px-4 py-1.5 text-xs font-semibold text-military-300 hover:bg-military-800 hover:text-white transition"
           >
-            Cerrar
+            Cerrar Escáner
           </button>
         </div>
       </div>

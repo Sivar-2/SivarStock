@@ -5,6 +5,17 @@ import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
   try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    if (user.role !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Acceso denegado: El módulo de Movimientos es exclusivo del rol ADMIN.' },
+        { status: 403 }
+      );
+    }
+
     const url = new URL(req.url);
     const movementType = url.searchParams.get('movementType');
     const productId = url.searchParams.get('productId');
@@ -62,6 +73,12 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    if (user.role !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Acceso denegado: El registro de Movimientos es exclusivo del rol ADMIN.' },
+        { status: 403 }
+      );
     }
 
     const body = await req.json();

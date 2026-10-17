@@ -135,6 +135,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       <QrScannerModal
         isOpen={scannerOpen}
         onClose={() => setScannerOpen(false)}
+        currentUser={currentUser}
       />
     </div>
   );

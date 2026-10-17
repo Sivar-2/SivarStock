@@ -43,7 +43,7 @@ export const allNavigationItems = [
   { name: 'Inventario físico', href: '/inventario', icon: Boxes, tabKey: 'INVENTARIO' },
   { name: 'Celulares y líneas', href: '/celulares', icon: Smartphone, tabKey: 'CELULARES' },
   { name: 'Categorías y productos', href: '/productos', icon: Layers, tabKey: 'PRODUCTOS' },
-  { name: 'Entradas y movimientos', href: '/movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS' },
+  { name: 'Entradas y movimientos', href: '/movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS', adminOnly: true },
   { name: 'Asignaciones a personal', href: '/asignaciones', icon: UserCheck, tabKey: 'ASIGNACIONES' },
   { name: 'Averías y mantenimiento', href: '/mantenimiento', icon: Wrench, tabKey: 'MANTENIMIENTO', badgeKey: 'brokenItems' },
   { name: 'Licencias y servicios', href: '/servicios-digitales', icon: Globe, tabKey: 'SERVICIOS', badgeKey: 'expiringServices' },

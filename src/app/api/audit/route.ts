@@ -7,8 +7,14 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user || !checkPermission(user, 'SUBADMIN')) {
-      return NextResponse.json({ error: 'No autorizado para consultar bitácora de auditoría.' }, { status: 403 });
+    if (!user) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    if (user.role !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Acceso denegado: El módulo de Auditoría es exclusivo del rol ADMIN.' },
+        { status: 403 }
+      );
     }
 
     const { searchParams } = new URL(req.url);

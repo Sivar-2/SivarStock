@@ -18,7 +18,8 @@ import {
   AlertCircle,
   Eye,
   CheckCircle,
-  X
+  X,
+  Archive
 } from 'lucide-react';
 import QrCodeModal from '@/components/QrCodeModal';
 import ConfirmationModal from '@/components/ConfirmationModal';
@@ -310,7 +311,67 @@ export default function InventarioPage() {
       </div>
 
       {/* Barra de Búsqueda y Filtros */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+        {/* Pestañas de Vista Rápida / Carpeta de Archivados */}
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 pb-3">
+          <button
+            type="button"
+            onClick={() => setStatus('')}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              status === ''
+                ? 'bg-military-800 text-white shadow-sm'
+                : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            Todos los Activos
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatus('DISPONIBLE')}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              status === 'DISPONIBLE'
+                ? 'bg-emerald-700 text-white shadow-sm'
+                : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            Disponibles en Bodega
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatus('ASIGNADO')}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              status === 'ASIGNADO'
+                ? 'bg-blue-700 text-white shadow-sm'
+                : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            Asignados a Personal
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatus('EN_REVISION')}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              status === 'EN_REVISION'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            En Revisión / Reparación
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatus('DADO_DE_BAJA')}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+              status === 'DADO_DE_BAJA'
+                ? 'bg-rose-700 text-white shadow-sm ring-2 ring-rose-600/30'
+                : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
+            }`}
+          >
+            <Archive className="h-3.5 w-3.5" />
+            <span>📁 Carpeta de Archivados / Dados de Baja</span>
+          </button>
+        </div>
+
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
           {/* Búsqueda */}
           <div className="lg:col-span-2">

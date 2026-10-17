@@ -21,17 +21,25 @@ export default function AuditoriaPage() {
   const [moduleFilter, setModuleFilter] = useState('');
   const [search, setSearch] = useState('');
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
 
   const fetchLogs = () => {
     setLoading(true);
+    setAccessDenied(false);
     const p = new URLSearchParams();
     if (moduleFilter) p.set('module', moduleFilter);
     if (search) p.set('search', search);
 
     fetch(`/api/audit?${p.toString()}`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (r.status === 403) {
+          setAccessDenied(true);
+          return null;
+        }
+        return r.json();
+      })
       .then((d) => {
-        if (d.logs) setLogs(d.logs);
+        if (d && d.logs) setLogs(d.logs);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -40,6 +48,18 @@ export default function AuditoriaPage() {
   useEffect(() => {
     fetchLogs();
   }, [moduleFilter, search]);
+
+  if (accessDenied) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-8 text-center max-w-xl mx-auto my-12">
+        <ShieldAlert className="h-12 w-12 text-rose-600 mx-auto mb-3" />
+        <h2 className="text-lg font-black text-rose-900">Acceso Restringido - Solo Administradores</h2>
+        <p className="text-xs text-rose-700 mt-1">
+          El módulo de bitácora de auditoría es de uso estrictamente confidencial para el rol ADMIN.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

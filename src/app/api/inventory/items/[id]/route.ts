@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run, transaction } from '@/lib/db';
-import { getCurrentUser, checkPermission } from '@/lib/auth';
+import { getCurrentUser, checkPermission, canAccessModule } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -84,7 +84,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const user = await getCurrentUser();
-    if (!user || !checkPermission(user, 'AREA_MANAGER')) {
+    if (!user || !canAccessModule(user, 'INVENTARIO', 'WRITE')) {
       return NextResponse.json({ error: 'No autorizado para modificar activos.' }, { status: 403 });
     }
 
@@ -156,8 +156,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const user = await getCurrentUser();
-    if (!user || !checkPermission(user, 'ADMIN')) {
-      return NextResponse.json({ error: 'Solo administradores pueden dar de baja activos.' }, { status: 403 });
+    if (!user || !canAccessModule(user, 'INVENTARIO', 'DELETE')) {
+      return NextResponse.json({ error: 'Solo administradores o usuarios autorizados pueden dar de baja activos.' }, { status: 403 });
     }
 
     const { id } = params;
@@ -170,18 +170,30 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     }
 
     await transaction(async () => {
-      // No borramos físicamente: marcamos DADO_DE_BAJA y desasignamos
+      // 1. Cerrar asignación activa si existía
+      await run(`
+        UPDATE assignments
+        SET status = 'DEVUELTO',
+            returned_at = datetime('now'),
+            return_notes = ?
+        WHERE item_id = ? AND status = 'ACTIVA'
+      `, [reason, id]);
+
+      // 2. Marcar DADO_DE_BAJA, desasignar empleado y registrar notas de baja
       await run(`
         UPDATE inventory_items
         SET operational_status = 'DADO_DE_BAJA',
-            physical_condition = 'DANADO',
+            physical_condition = 'AVERIADO',
+            current_employee_id = NULL,
             current_assigned_user_id = NULL,
-            notes = notes || ' | BAJA: ' || ?,
+            is_broken = 1,
+            broken_notes = ?,
+            notes = COALESCE(notes, '') || ' | BAJA: ' || ?,
             updated_at = datetime('now')
         WHERE id = ?
-      `, [reason, id]);
+      `, [reason, reason, id]);
 
-      // Registrar movimiento de baja
+      // 3. Registrar movimiento de baja
       const movId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`;
       await run(`
         INSERT INTO inventory_movements (

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query, queryOne, run } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { query, queryOne, run, transaction } from '@/lib/db';
+import { getCurrentUser, canAccessModule } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
@@ -62,6 +62,12 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    if (!canAccessModule(user, 'PRODUCTOS', 'WRITE')) {
+      return NextResponse.json(
+        { error: 'Acceso denegado: No tiene permisos de creación o modificación en Productos.' },
+        { status: 403 }
+      );
     }
 
     const body = await req.json();
@@ -365,6 +371,12 @@ export async function PUT(req: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    if (!canAccessModule(user, 'PRODUCTOS', 'WRITE')) {
+      return NextResponse.json(
+        { error: 'Acceso denegado: No tiene permisos para modificar productos.' },
+        { status: 403 }
+      );
+    }
 
     const body = await req.json();
     const {
@@ -468,16 +480,64 @@ export async function PUT(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    if (!user || !canAccessModule(user, 'PRODUCTOS', 'DELETE')) {
+      return NextResponse.json(
+        { error: 'Acceso denegado: Se requiere rol ADMIN o SUBADMIN con permisos de edición para eliminar productos.' },
+        { status: 403 }
+      );
+    }
 
     const url = new URL(req.url);
     const id = url.searchParams.get('id');
-    const reason = url.searchParams.get('reason') || 'Inactivado por administrador';
+    const reason = url.searchParams.get('reason') || 'Eliminación autorizada por administración';
 
-    if (!id) return NextResponse.json({ error: 'ID requerido' }, { status: 400 });
+    if (!id) return NextResponse.json({ error: 'ID de producto requerido' }, { status: 400 });
 
-    const prod = await queryOne<any>(`SELECT name FROM products WHERE id = ?`, [id]);
-    await run(`UPDATE products SET is_active = 0 WHERE id = ?`, [id]);
+    const prod = await queryOne<any>(`SELECT * FROM products WHERE id = ?`, [id]);
+    if (!prod) return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
+
+    await transaction(async () => {
+      // 1. Eliminar asignaciones vinculadas a este producto o a sus activos individuales
+      await run(
+        `DELETE FROM assignments 
+         WHERE product_id = ? OR item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
+        [id, id]
+      );
+
+      // 2. Eliminar stock de consumibles
+      await run(`DELETE FROM consumable_stocks WHERE product_id = ?`, [id]);
+
+      // 3. Eliminar registros de mantenimiento de sus activos
+      await run(
+        `DELETE FROM maintenance_records 
+         WHERE item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
+        [id]
+      );
+
+      // 4. Eliminar registros de costos de este producto o sus activos
+      await run(
+        `DELETE FROM cost_records 
+         WHERE product_id = ? OR item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
+        [id, id]
+      );
+
+      // 5. Eliminar movimientos kardex vinculados
+      await run(
+        `DELETE FROM inventory_movements 
+         WHERE product_id = ? OR item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
+        [id, id]
+      );
+
+      // 6. Eliminar activos físicos individuales de este producto
+      await run(`DELETE FROM inventory_items WHERE product_id = ?`, [id]);
+
+      // 7. Eliminar historial de precios y proveedores asociados
+      await run(`DELETE FROM product_price_history WHERE product_id = ?`, [id]);
+      await run(`DELETE FROM product_suppliers WHERE product_id = ?`, [id]);
+
+      // 8. Eliminar el producto
+      await run(`DELETE FROM products WHERE id = ?`, [id]);
+    });
 
     await logAudit({
       userId: user.id,
@@ -486,13 +546,16 @@ export async function DELETE(req: NextRequest) {
       action: 'ELIMINAR_PRODUCTO',
       module: 'PRODUCTOS',
       entityId: id,
-      entityName: prod ? prod.name : id,
-      reason,
+      entityName: `${prod.code} - ${prod.name}`,
+      reason: `Producto eliminado en cascada por ${user.fullName}. Motivo: ${reason}`,
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      message: `Producto ${prod.name} y sus registros dependientes eliminados correctamente.`,
+    });
   } catch (error: any) {
     console.error('Error al eliminar producto:', error);
-    return NextResponse.json({ error: 'Error al eliminar producto.' }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Error al eliminar producto.' }, { status: 500 });
   }
 }

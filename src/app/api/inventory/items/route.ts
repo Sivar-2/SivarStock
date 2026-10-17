@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run, transaction } from '@/lib/db';
-import { getCurrentUser, checkPermission } from '@/lib/auth';
+import { getCurrentUser, checkPermission, canAccessModule } from '@/lib/auth';
 import { generatePermanentCode } from '@/lib/codes';
 import { logAudit } from '@/lib/audit';
 
@@ -117,7 +117,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user || !checkPermission(user, 'AREA_MANAGER')) {
+    if (!user || !canAccessModule(user, 'INVENTARIO', 'WRITE')) {
       return NextResponse.json({ error: 'No autorizado para registrar activos.' }, { status: 403 });
     }
 

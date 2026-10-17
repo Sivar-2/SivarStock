@@ -45,9 +45,11 @@ export default function MovimientosPage() {
   });
 
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
+    setAccessDenied(false);
     try {
       const queryParams = new URLSearchParams();
       if (movementType) queryParams.set('movementType', movementType);
@@ -59,6 +61,11 @@ export default function MovimientosPage() {
         fetch('/api/products'),
         fetch('/api/catalogs'),
       ]);
+
+      if (movRes.status === 403) {
+        setAccessDenied(true);
+        return;
+      }
 
       const movData = await movRes.json();
       const prodData = await prodRes.json();
@@ -77,6 +84,18 @@ export default function MovimientosPage() {
   useEffect(() => {
     loadData();
   }, [movementType, fromDate, toDate]);
+
+  if (accessDenied) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-8 text-center max-w-xl mx-auto my-12">
+        <ArrowLeftRight className="h-12 w-12 text-rose-600 mx-auto mb-3" />
+        <h2 className="text-lg font-black text-rose-900">Acceso Restringido - Solo Administradores</h2>
+        <p className="text-xs text-rose-700 mt-1">
+          El módulo de registro y consulta de movimientos kardex es exclusivo para el rol ADMIN.
+        </p>
+      </div>
+    );
+  }
 
   const handleCreateMovement = async (e: React.FormEvent) => {
     e.preventDefault();

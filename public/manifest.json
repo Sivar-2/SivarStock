@@ -1,0 +1,22 @@
+{
+  "name": "SivarStock - Control de Inventario y Activos",
+  "short_name": "SivarStock",
+  "description": "Sistema empresarial de gestión y control de inventario físico y digital para empresas manufactureras.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#131E17",
+  "theme_color": "#131E17",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

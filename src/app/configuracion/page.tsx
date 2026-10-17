@@ -19,12 +19,20 @@ import {
   Sparkles,
   RefreshCw,
   Eye,
-  Sliders
+  Sliders,
+  AlertTriangle,
+  Trash2
 } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ConfiguracionPage() {
   const [activeTab, setActiveTab] = useState<'apariencia' | 'respaldos' | 'qr_generator' | 'scanner_validator' | 'menu_nombres' | 'dock_shortcuts'>('apariencia');
+
+  // Purga de Base de Datos
+  const [showPurgeModal, setShowPurgeModal] = useState(false);
+  const [purgeConfirmText, setPurgeConfirmText] = useState('');
+  const [purging, setPurging] = useState(false);
+  const [purgeResult, setPurgeResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Modo Nocturno
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -244,6 +252,35 @@ export default function ConfiguracionPage() {
     }
   };
 
+  // Purgar todos los datos de prueba e iniciar inventario de cero
+  const handlePurgeAllData = async () => {
+    if (purgeConfirmText.trim() !== 'LIMPIAR') {
+      alert('Debes escribir la palabra exacta LIMPIAR para confirmar.');
+      return;
+    }
+
+    setPurging(true);
+    try {
+      const res = await fetch('/api/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'PURGE_ALL_DATA' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al purgar los datos');
+      
+      setPurgeResult({ success: true, message: data.message });
+      setShowPurgeModal(false);
+      setPurgeConfirmText('');
+      alert('¡Base de datos de prueba purgada exitosamente! El sistema ha iniciado de cero.');
+      window.location.reload();
+    } catch (err: any) {
+      alert(`Error durante la purga: ${err.message}`);
+    } finally {
+      setPurging(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Encabezado */}
@@ -385,6 +422,32 @@ export default function ConfiguracionPage() {
                 <Download className="h-4 w-4" />
                 <span>Exportar JSON Completo</span>
               </a>
+            </div>
+
+            {/* Zona de Peligro: Limpiar Datos de Prueba */}
+            <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-5 col-span-1 sm:col-span-2">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-rose-100 text-rose-700 shrink-0 mt-0.5">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-bold text-rose-900">
+                    Zona de Mantenimiento de Datos: Iniciar Inventario Real de Cero
+                  </h3>
+                  <p className="text-xs text-rose-700 mt-1 leading-relaxed">
+                    Esta acción vacía con un solo clic todos los datos de prueba (activos individuales, productos, asignaciones, consumibles, celulares, movimientos y empleados de prueba), conservando intactos los departamentos, categorías base y el usuario administrador actual.
+                  </p>
+                  <div className="mt-4 flex items-center gap-3">
+                    <button
+                      onClick={() => setShowPurgeModal(true)}
+                      className="flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700 transition"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span>Limpiar Base de Datos de Prueba (Iniciar Inventario de Cero)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -809,6 +872,77 @@ export default function ConfiguracionPage() {
                 className="rounded-lg bg-military-800 px-5 py-2 text-xs font-bold text-white hover:bg-military-900 shadow-sm"
               >
                 Confirmar Sustitución
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmación de Seguridad: Limpiar Base de Datos */}
+      {showPurgeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4 border border-rose-200">
+            <div className="flex items-center gap-3 border-b border-rose-100 pb-3 text-rose-700">
+              <AlertTriangle className="h-6 w-6 shrink-0" />
+              <div>
+                <h3 className="text-base font-black text-rose-900">
+                  ¿Reiniciar Base de Datos a Cero?
+                </h3>
+                <span className="text-[11px] text-rose-600 font-semibold">
+                  Acción irreversible de alto impacto
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs text-slate-700">
+              <p>
+                Esta acción eliminará de forma permanente todos los datos de prueba registrados en el sistema:
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-slate-600 font-mono text-[11px]">
+                <li>Activos físicos individuales y movimientos kardex</li>
+                <li>Catálogo de productos y stocks consumibles</li>
+                <li>Historial de celulares y asignaciones a personal</li>
+                <li>Registros de mantenimiento, servicios y costos</li>
+                <li>Empleados de prueba creados durante la demostración</li>
+              </ul>
+              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-[11px] text-emerald-800 font-medium">
+                ✓ Se conservarán tus Áreas / Departamentos, Categorías base y tu cuenta de Administrador.
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
+              <label className="block text-xs font-bold text-slate-800 mb-1">
+                Para confirmar, escribe la palabra <span className="text-rose-600 font-mono">LIMPIAR</span> en mayúsculas:
+              </label>
+              <input
+                type="text"
+                placeholder="LIMPIAR"
+                value={purgeConfirmText}
+                onChange={(e) => setPurgeConfirmText(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-rose-600"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPurgeModal(false);
+                  setPurgeConfirmText('');
+                }}
+                disabled={purging}
+                className="rounded-lg px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handlePurgeAllData}
+                disabled={purging || purgeConfirmText.trim() !== 'LIMPIAR'}
+                className="flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700 shadow-sm disabled:opacity-50 transition"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>{purging ? 'Limpiando base...' : 'Confirmar y Purgar Todo'}</span>
               </button>
             </div>
           </div>

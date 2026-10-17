@@ -99,6 +99,18 @@ export async function getCurrentUser(): Promise<UserSession | null> {
       allowedTabs = ['DASHBOARD', 'INVENTARIO', 'CELULARES', 'PRODUCTOS'];
     }
 
+    // Regla estricta 1: MOVIMIENTOS y AUDITORIA son EXCLUSIVOS del rol ADMIN.
+    // Para cualquier otro rol, se ocultan de sus allowedTabs.
+    if (row.role !== 'ADMIN') {
+      allowedTabs = allowedTabs.filter(
+        (tab: string) => tab !== 'MOVIMIENTOS' && tab !== 'AUDITORIA' && tab !== 'USUARIOS'
+      );
+    }
+
+    // Regla estricta 2: El rol VIEWER tiene canEdit = false forzado en el servidor
+    const isViewer = row.role === 'VIEWER';
+    const canEdit = isViewer ? false : Boolean(row.can_edit);
+
     return {
       id: row.id,
       username: row.username,
@@ -112,7 +124,7 @@ export async function getCurrentUser(): Promise<UserSession | null> {
       canViewFinancials: Boolean(row.can_view_financials),
       canExport: Boolean(row.can_export),
       canManageUsers: Boolean(row.can_manage_users || row.role === 'ADMIN'),
-      canEdit: Boolean(row.can_edit),
+      canEdit,
       allowedTabs,
       onlyOwnDepartment: Boolean(row.only_own_department),
     };
@@ -120,6 +132,95 @@ export async function getCurrentUser(): Promise<UserSession | null> {
     console.error('Error al obtener usuario de sesión:', error);
     return null;
   }
+}
+
+/**
+ * Función central de autorización RBAC por Módulo y Modo (READ, WRITE, DELETE).
+ * - ADMIN: acceso total irrestricto.
+ * - MOVIMIENTOS y AUDITORIA: Exclusivos de ADMIN (retorna false para cualquier otro rol).
+ * - VIEWER: forzado canEdit = false, sólo puede READ en sus pestañas permitidas.
+ * - SUBADMIN (CEO): con canEdit = true puede crear y editar productos en /api/products
+ *   e ítems en /api/inventory/items según sus allowedTabs.
+ */
+export function canAccessModule(
+  user: UserSession | null,
+  moduleName: string,
+  mode: 'READ' | 'WRITE' | 'DELETE' = 'READ'
+): boolean {
+  if (!user) return false;
+  if (user.role === 'ADMIN') return true;
+
+  const mod = moduleName.toUpperCase().trim();
+
+  // Regla estricta 1: MOVIMIENTOS y AUDITORIA exclusivos de ADMIN
+  if (mod === 'MOVIMIENTOS' || mod === 'AUDITORIA') {
+    return false;
+  }
+
+  // Regla estricta 2: VIEWER nunca puede escribir ni eliminar
+  if (user.role === 'VIEWER') {
+    if (mode === 'WRITE' || mode === 'DELETE') return false;
+    return user.allowedTabs.includes(mod);
+  }
+
+  // Si el módulo no está en las pestañas permitidas del usuario
+  if (!user.allowedTabs.includes(mod)) {
+    return false;
+  }
+
+  // Para lectura basta con tener la pestaña habilitada
+  if (mode === 'READ') {
+    return true;
+  }
+
+  // Si requiere escritura o borrado, validar canEdit
+  if (!user.canEdit) {
+    return false;
+  }
+
+  // Para borrado (DELETE):
+  if (mode === 'DELETE') {
+    // Solo ADMIN puede borrar empleados o usuarios
+    if (mod === 'EMPLEADOS' || mod === 'DEPARTAMENTOS' || mod === 'USUARIOS') {
+      return false;
+    }
+    // SUBADMIN con canEdit puede borrar en PRODUCTOS o INVENTARIO
+    if (user.role === 'SUBADMIN') {
+      return mod === 'PRODUCTOS' || mod === 'INVENTARIO' || mod === 'CELULARES';
+    }
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Helper rápido para rutas API: valida que el usuario no sea VIEWER ni tenga canEdit deshabilitado.
+ * Retorna mensaje de error si está denegado, o null si está autorizado.
+ */
+export function validateApiWritePermission(
+  user: UserSession | null,
+  moduleName?: string
+): { error: string; status: number } | null {
+  if (!user) {
+    return { error: 'No autorizado: Sesión requerida', status: 401 };
+  }
+
+  if (user.role === 'VIEWER' || !user.canEdit) {
+    return {
+      error: 'Acceso denegado: El rol Lector (VIEWER) tiene permisos de edición desactivados en el servidor.',
+      status: 403,
+    };
+  }
+
+  if (moduleName && !canAccessModule(user, moduleName, 'WRITE')) {
+    return {
+      error: `Acceso denegado: No tiene permisos de modificación en el módulo ${moduleName}.`,
+      status: 403,
+    };
+  }
+
+  return null;
 }
 
 /**

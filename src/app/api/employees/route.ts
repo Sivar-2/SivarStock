@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query, queryOne, run } from '@/lib/db';
-import { getCurrentUser, hashPassword } from '@/lib/auth';
+import { query, queryOne, run, transaction } from '@/lib/db';
+import { getCurrentUser, hashPassword, canAccessModule } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
@@ -61,6 +61,8 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
+      employeeCode: inputCode,
+      employee_code,
       fullName,
       initials,
       email,
@@ -76,31 +78,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'El nombre completo es obligatorio.' }, { status: 400 });
     }
 
-    // Obtener código de departamento para generar código único de empleado
-    let deptCode = 'GEN';
-    if (departmentId) {
-      const dept = await queryOne<any>(`SELECT code FROM departments WHERE id = ?`, [departmentId]);
-      if (dept) deptCode = dept.code;
+    // Código correlativo secuencial único EMP-001, EMP-002... si no se especifica
+    let finalEmployeeCode = (inputCode || employee_code || '').trim().toUpperCase();
+    if (!finalEmployeeCode) {
+      const allEmps = await query<any>(`SELECT employee_code FROM employees`);
+      let maxNum = 0;
+      for (const e of allEmps) {
+        if (e.employee_code) {
+          const match = e.employee_code.match(/EMP-(\d+)/i) || e.employee_code.match(/EMP-[A-Z0-9]+-(\d+)/i);
+          if (match && match[1]) {
+            const n = parseInt(match[1], 10);
+            if (!isNaN(n) && n > maxNum) maxNum = n;
+          }
+        }
+      }
+      const nextSeq = (maxNum + 1).toString().padStart(3, '0');
+      finalEmployeeCode = `EMP-${nextSeq}`;
     }
 
-    // Generar correlativo secuencial único EMP-{DEPT}-{SEQ:3}
-    const countRow = await queryOne<any>(
-      `SELECT COUNT(*) as total FROM employees WHERE department_id = ?`,
-      [departmentId || '']
-    );
-    const seq = ((countRow ? countRow.total : 0) + 1).toString().padStart(3, '0');
-    const employeeCode = `EMP-${deptCode}-${seq}`;
-
-    // Calcular iniciales si no se proporcionan
+    // Calcular iniciales automáticamente: "Carlos Gómez" -> "CG"
     const calculatedInitials = initials && initials.trim()
       ? initials.trim().toUpperCase()
       : fullName
           .trim()
-          .split(' ')
+          .split(/\s+/)
+          .filter(Boolean)
           .map((n: string) => n[0])
           .slice(0, 3)
           .join('')
-          .toUpperCase();
+          .toUpperCase() || 'EM';
 
     const employeeId = `emp-${Date.now()}`;
 
@@ -111,7 +117,7 @@ export async function POST(req: NextRequest) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVO')`,
       [
         employeeId,
-        employeeCode,
+        finalEmployeeCode,
         fullName.trim(),
         calculatedInitials,
         email ? email.trim() : null,
@@ -154,11 +160,11 @@ export async function POST(req: NextRequest) {
       action: 'CREAR_EMPLEADO',
       module: 'DEPARTAMENTOS',
       entityId: employeeId,
-      entityName: `${employeeCode} - ${fullName}`,
+      entityName: `${finalEmployeeCode} - ${fullName}`,
       reason: 'Registro de nuevo empleado en la empresa',
     });
 
-    return NextResponse.json({ success: true, employeeId, employeeCode });
+    return NextResponse.json({ success: true, employeeId, employeeCode: finalEmployeeCode });
   } catch (error: any) {
     console.error('Error al registrar empleado:', error);
     return NextResponse.json({ error: error.message || 'Error al guardar empleado.' }, { status: 500 });
@@ -368,5 +374,92 @@ export async function PUT(req: NextRequest) {
   } catch (error: any) {
     console.error('Error al actualizar empleado:', error);
     return NextResponse.json({ error: error.message || 'Error al actualizar.' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const user = await getCurrentUser();
+    if (!user || user.role !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Acceso denegado: Solo administradores (ADMIN) pueden eliminar empleados.' },
+        { status: 403 }
+      );
+    }
+
+    const url = new URL(req.url);
+    const id = url.searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json({ error: 'ID de empleado requerido.' }, { status: 400 });
+    }
+
+    const emp = await queryOne<any>(`SELECT * FROM employees WHERE id = ?`, [id]);
+    if (!emp) {
+      return NextResponse.json({ error: 'Empleado no encontrado.' }, { status: 404 });
+    }
+
+    await transaction(async () => {
+      // 1. Cerrar asignaciones activas
+      await run(
+        `UPDATE assignments 
+         SET status = 'DEVUELTO', 
+             returned_at = datetime('now'), 
+             return_notes = 'Liberado por eliminación del custodio'
+         WHERE employee_id = ? AND status = 'ACTIVA'`,
+        [id]
+      );
+
+      // 2. Liberar equipos en inventory_items pasándolos a DISPONIBLE
+      await run(
+        `UPDATE inventory_items 
+         SET operational_status = 'DISPONIBLE',
+             current_employee_id = NULL,
+             current_assigned_user_id = NULL,
+             current_department_id = COALESCE(current_department_id, 'dept-bod'),
+             notes = COALESCE(notes, '') || ' | Liberado a Bodega por eliminación del empleado ${emp.full_name}',
+             updated_at = datetime('now')
+         WHERE current_employee_id = ?`,
+        [id]
+      );
+
+      // 3. Liberar dispositivos móviles en mobile_devices
+      await run(
+        `UPDATE mobile_devices
+         SET status = 'DISPONIBLE',
+             employee_id = NULL,
+             updated_at = datetime('now')
+         WHERE employee_id = ?`,
+        [id]
+      );
+
+      // 4. Desvincular usuario del sistema si tenía asociado
+      await run(
+        `UPDATE users SET employee_id = NULL WHERE employee_id = ?`,
+        [id]
+      );
+
+      // 5. Eliminar el empleado
+      await run(`DELETE FROM employees WHERE id = ?`, [id]);
+    });
+
+    await logAudit({
+      userId: user.id,
+      username: user.username,
+      userRole: user.role,
+      action: 'ELIMINAR_EMPLEADO',
+      module: 'DEPARTAMENTOS',
+      entityId: id,
+      entityName: `${emp.employee_code} - ${emp.full_name}`,
+      reason: `Empleado eliminado por administrador ${user.fullName}. Sus activos y celulares fueron liberados a estado DISPONIBLE en Bodega.`,
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: `Empleado ${emp.full_name} eliminado y sus equipos liberados a estado DISPONIBLE.`,
+    });
+  } catch (error: any) {
+    console.error('Error al eliminar empleado:', error);
+    return NextResponse.json({ error: error.message || 'Error al eliminar empleado.' }, { status: 500 });
   }
 }

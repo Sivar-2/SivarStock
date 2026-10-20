@@ -23,9 +23,9 @@ export const isPostgresConfigured = Boolean(POSTGRES_URL);
 // En Vercel / serverless la única carpeta escribible para SQLite es /tmp
 const DB_FILE_PATH = isVercel
   ? path.resolve('/tmp', 'sivarstock.db')
-  : (process.env.DATABASE_PATH 
-      ? path.resolve(process.cwd(), process.env.DATABASE_PATH)
-      : path.resolve(process.cwd(), 'data', 'sivarstock.db'));
+  : (process.env.DATABASE_PATH
+    ? path.resolve(process.cwd(), process.env.DATABASE_PATH)
+    : path.resolve(process.cwd(), 'data', 'sivarstock.db'));
 
 /**
  * Retorna el modo activo de la base de datos
@@ -41,7 +41,7 @@ export function getDatabaseEngine(): 'POSTGRESQL' | 'SQLITE' {
  */
 function getPgPool(): Pool {
   if (!pgPoolInstance && POSTGRES_URL) {
-    const isLocalOrDisabledSsl = 
+    const isLocalOrDisabledSsl =
       POSTGRES_URL.includes('localhost') ||
       POSTGRES_URL.includes('127.0.0.1') ||
       POSTGRES_URL.includes('192.168.') ||
@@ -191,13 +191,13 @@ export function saveDb(): void {
 export function translateQueryForPostgres(sqlQuery: string): string {
   let paramIndex = 1;
   let translated = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
-  
+
   // Fechas y marcas de tiempo
   translated = translated.replace(/datetime\('now',\s*'-(\d+)\s*days'\)/gi, "(NOW() - INTERVAL '$1 days')");
   translated = translated.replace(/datetime\('now',\s*'\+(\d+)\s*days'\)/gi, "(NOW() + INTERVAL '$1 days')");
   translated = translated.replace(/datetime\('now'\)/gi, 'NOW()');
   translated = translated.replace(/date\('now'\)/gi, 'CURRENT_DATE');
-  
+
   // Días y Julián
   translated = translated.replace(/julianday\(([^)]+)\)\s*-\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) - CURRENT_DATE)");
   translated = translated.replace(/julianday\(([^)]+)\)\s*>=\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) >= CURRENT_DATE)");
@@ -233,7 +233,7 @@ export async function query<T = any>(sqlQuery: string, params: any[] = []): Prom
   if (params && params.length > 0) {
     stmt.bind(params);
   }
-  
+
   const results: T[] = [];
   while (stmt.step()) {
     results.push(stmt.getAsObject() as unknown as T);

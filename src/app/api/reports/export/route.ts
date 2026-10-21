@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateCsv, generateExcelBuffer, generatePdfDoc } from '@/lib/export';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser, isAdminOrSuperAdmin } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (user && !user.canExport && user.role !== 'ADMIN') {
+    if (user && !user.canExport && !isAdminOrSuperAdmin(user)) {
       return NextResponse.json({ error: 'No cuenta con permisos para exportar información.' }, { status: 403 });
     }
 

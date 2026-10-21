@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser, isAdminOrSuperAdmin } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
@@ -9,9 +9,9 @@ export async function GET(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
     }
-    if (user.role !== 'ADMIN') {
+    if (!isAdminOrSuperAdmin(user)) {
       return NextResponse.json(
-        { error: 'Acceso denegado: El módulo de Movimientos es exclusivo del rol ADMIN.' },
+        { error: 'Acceso denegado: El módulo de Movimientos es exclusivo de Administradores.' },
         { status: 403 }
       );
     }
@@ -74,9 +74,9 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
     }
-    if (user.role !== 'ADMIN') {
+    if (!isAdminOrSuperAdmin(user)) {
       return NextResponse.json(
-        { error: 'Acceso denegado: El registro de Movimientos es exclusivo del rol ADMIN.' },
+        { error: 'Acceso denegado: El registro de Movimientos es exclusivo de Administradores.' },
         { status: 403 }
       );
     }

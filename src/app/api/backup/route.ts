@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { getCurrentUser, checkPermission } from '@/lib/auth';
+import { getCurrentUser, checkPermission, isAdminOrSuperAdmin } from '@/lib/auth';
 import { saveDb, query, run, transaction, getDatabaseEngine } from '@/lib/db';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user || user.role !== 'ADMIN' || user.email !== 'alexander7tm@gmail.com') {
-      return NextResponse.json({ error: 'Solo el administrador principal (alexander7tm@gmail.com) puede descargar copias de seguridad.' }, { status: 403 });
+    if (!isAdminOrSuperAdmin(user)) {
+      return NextResponse.json({ error: 'Solo el administrador principal puede descargar copias de seguridad.' }, { status: 403 });
     }
 
     const { searchParams } = new URL(req.url);
@@ -122,8 +122,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user || user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Solo el administrador principal (ADMIN) puede realizar esta operación.' }, { status: 403 });
+    if (!isAdminOrSuperAdmin(user)) {
+      return NextResponse.json({ error: 'Solo el administrador principal puede realizar esta operación.' }, { status: 403 });
     }
 
     const backupData = await req.json();

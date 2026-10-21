@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import { getCurrentUser, checkPermission } from '@/lib/auth';
+import { getCurrentUser, checkPermission, isAdminOrSuperAdmin } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,9 +10,9 @@ export async function GET(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
     }
-    if (user.role !== 'ADMIN') {
+    if (!isAdminOrSuperAdmin(user)) {
       return NextResponse.json(
-        { error: 'Acceso denegado: El módulo de Auditoría es exclusivo del rol ADMIN.' },
+        { error: 'Acceso denegado: El módulo de Auditoría es exclusivo de Administradores.' },
         { status: 403 }
       );
     }

@@ -465,3 +465,18 @@ export function canAccessDepartment(user: UserSession | null, departmentId?: str
 
   return user.departmentId === departmentId;
 }
+
+/**
+ * Validador universal de privilegios de Administrador (Admin o Super Admin TurcoSivar)
+ */
+export function isAdminOrSuperAdmin(user: UserSession | null): user is UserSession {
+  if (!user) return false;
+  return Boolean(
+    user.isSuperAdmin ||
+    user.role === 'SUPERADMIN' ||
+    user.role === 'SUPER_ADMIN' ||
+    user.role === 'ADMIN' ||
+    user.username?.toLowerCase() === 'turcosivar'
+  );
+}
+

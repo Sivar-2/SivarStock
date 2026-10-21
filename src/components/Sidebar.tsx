@@ -68,8 +68,11 @@ export default function Sidebar({
   const isSuperAdmin = Boolean(
     currentUser?.isSuperAdmin ||
     currentUser?.role === 'SUPERADMIN' ||
-    currentUser?.username === 'TurcoSivar'
+    currentUser?.role === 'SUPER_ADMIN' ||
+    currentUser?.username?.toLowerCase() === 'turcosivar'
   );
+
+  const isAdmin = isSuperAdmin || currentUser?.role === 'ADMIN';
 
   // Filtrado de pestañas según permisos del usuario (RBAC granular)
   const userAllowedTabs = currentUser?.allowedTabs || [
@@ -89,13 +92,13 @@ export default function Sidebar({
       return true;
     }
 
-    // Auditoría exclusiva de ADMIN
-    if (item.tabKey === 'AUDITORIA' && currentUser?.role !== 'ADMIN') {
+    // Auditoría y movimientos exclusivos de administradores
+    if ((item.tabKey === 'AUDITORIA' || item.tabKey === 'MOVIMIENTOS') && !isAdmin) {
       return false;
     }
 
     // Si el usuario no es admin, verificar allowed_tabs_json
-    if (currentUser?.role !== 'ADMIN' && !userAllowedTabs.includes(item.tabKey)) {
+    if (!isAdmin && !userAllowedTabs.includes(item.tabKey)) {
       return false;
     }
 

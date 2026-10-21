@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run, transaction } from '@/lib/db';
-import { getCurrentUser, hashPassword, canAccessModule } from '@/lib/auth';
+import { getCurrentUser, hashPassword, canAccessModule, isAdminOrSuperAdmin } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
@@ -380,9 +380,9 @@ export async function PUT(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user || user.role !== 'ADMIN') {
+    if (!isAdminOrSuperAdmin(user)) {
       return NextResponse.json(
-        { error: 'Acceso denegado: Solo administradores (ADMIN) pueden eliminar empleados.' },
+        { error: 'Acceso denegado: Solo administradores pueden eliminar empleados.' },
         { status: 403 }
       );
     }

@@ -1,7 +1,8 @@
 -- ============================================================================
--- SIVARSTOCK - ESQUEMA RELACIONAL EMPRESARIAL COMPLETO PARA POSTGRESQL & SUPABASE
--- Sistema de Control de Inventario Físico y Digital (Guatemala - Quetzales GTQ)
--- 100% Alineado con el Esquema Oficial y Preparado para Looker Studio (Data Studio)
+-- SIVARSTOCK ENTERPRISE - ESQUEMA RELACIONAL COMPLETO PARA POSTGRESQL
+-- Fábrica de Persianas y Complementos, S.A. (FPC) - Guatemala
+-- Moneda Oficial: Quetzales (GTQ - Q) con soporte dual en Dólares (USD)
+-- Arquitectura Local-First con Sincronización Idempotente y Privacidad de DPI
 -- ============================================================================
 
 -- Habilitar extensiones requeridas
@@ -17,13 +18,13 @@ CREATE TABLE IF NOT EXISTS departments (
   name VARCHAR(150) NOT NULL,
   cost_center VARCHAR(50),
   manager_name VARCHAR(150),
-  is_bodega SMALLINT DEFAULT 0, -- 1 para Cuarto de Servidores (Bodega)
+  is_bodega SMALLINT DEFAULT 0, -- 1 para "Cuarto de Servidores (Bodega)"
   is_active SMALLINT DEFAULT 1,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 1.1 UBICACIONES FÍSICAS DENTRO DE DEPARTAMENTOS
+-- 1.1 UBICACIONES FÍSICAS DENTRO DE DEPARTAMENTOS (Opcional / Retrocompatible)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS locations (
   id TEXT PRIMARY KEY,
@@ -36,27 +37,31 @@ CREATE TABLE IF NOT EXISTS locations (
 );
 
 -- ----------------------------------------------------------------------------
--- 2. EMPLEADOS / PERSONAL DE LA EMPRESA
+-- 2. EMPLEADOS / PERSONAL DE LA EMPRESA (CON RESGUARDO PRIVADO DE DPI)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS employees (
   id TEXT PRIMARY KEY,
-  employee_code VARCHAR(50) UNIQUE NOT NULL,
+  employee_code VARCHAR(50) UNIQUE NOT NULL, -- ej. EMP-001, EMP-IT-001
   full_name VARCHAR(150) NOT NULL,
   initials VARCHAR(10) NOT NULL,
+  dpi_number VARCHAR(50), -- Documento Personal de Identificación (PROTEGIDO: NUNCA expuesto en endpoints públicos)
   email VARCHAR(180),
   phone VARCHAR(50),
+  job_title VARCHAR(120), -- Cargo o Puesto
   department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   immediate_supervisor_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
-  company_name VARCHAR(150) DEFAULT 'Persiluz / SivarStock',
+  company_name VARCHAR(150) DEFAULT 'Fábrica de Persianas y Complementos, S.A.',
   status VARCHAR(30) NOT NULL DEFAULT 'ACTIVO' CHECK(status IN ('ACTIVO', 'INACTIVO', 'RETIRADO')),
   exit_date DATE,
   exit_reason TEXT,
   notes TEXT,
+  is_deleted SMALLINT DEFAULT 0,
+  deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 3. USUARIOS Y PERMISOS DEL SISTEMA (RBAC CON POKA-YOKE)
+-- 3. USUARIOS Y PERMISOS DEL SISTEMA (RBAC GRANULAR + ACCESO RÁPIDO PIN)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -64,11 +69,16 @@ CREATE TABLE IF NOT EXISTS users (
   full_name VARCHAR(150) NOT NULL,
   email VARCHAR(180) UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
-  role VARCHAR(30) NOT NULL DEFAULT 'VIEWER' CHECK(role IN ('ADMIN', 'SUBADMIN', 'AREA_MANAGER', 'VIEWER')),
+  pin_hash TEXT, -- Hash bcrypt de 4 dígitos para acceso rápido y segundo paso
+  quick_access_enabled SMALLINT DEFAULT 0, -- 1 si tiene PIN habilitado para ingreso rápido
+  role VARCHAR(30) NOT NULL DEFAULT 'VIEWER' CHECK(role IN ('SUPERADMIN', 'ADMIN', 'SUBADMIN', 'AREA_MANAGER', 'OPERATOR', 'VIEWER')),
   department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
   initials VARCHAR(10) NOT NULL,
-  allowed_tabs_json TEXT DEFAULT '["DASHBOARD","INVENTARIO","CELULARES","PRODUCTOS","MOVIMIENTOS","ASIGNACIONES","MANTENIMIENTO","SERVICIOS","COSTOS","REPORTES","DEPARTAMENTOS","CONFIGURACION"]',
+  -- Permisos Granulares Poka-Yoke por Pestaña
+  allowed_tabs_json TEXT DEFAULT '["INICIO","INVENTARIO","CELULARES","PRODUCTOS","MOVIMIENTOS","EMPLEADOS","MANTENIMIENTO","SERVICIOS","COSTOS","REPORTES","DEPARTAMENTOS","CONFIGURACION"]',
+  allowed_actions_json TEXT DEFAULT '{"can_read":1,"can_write":1,"can_delete":0}',
+  allowed_departments_json TEXT DEFAULT '[]',
   only_own_department SMALLINT DEFAULT 0,
   can_view_financials SMALLINT DEFAULT 1,
   can_export SMALLINT DEFAULT 1,
@@ -142,20 +152,25 @@ CREATE TABLE IF NOT EXISTS product_price_history (
 );
 
 -- ----------------------------------------------------------------------------
--- 6. ACTIVOS FÍSICOS INDIVIDUALES CON IDENTIFICADOR PERMANENTE (SIV-{DEPT}-{SEQ:6})
+-- 6. ACTIVOS FÍSICOS INDIVIDUALES (MÁQUINA DE ESTADOS Y TRAZABILIDAD QR)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS inventory_items (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
-  permanent_code VARCHAR(40) UNIQUE NOT NULL,
+  permanent_code VARCHAR(40) UNIQUE NOT NULL, -- ej. SIV-IT-000001
   serial_number VARCHAR(120),
   brand VARCHAR(100),
   model VARCHAR(100),
   current_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   current_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
   current_assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-  operational_status VARCHAR(30) NOT NULL DEFAULT 'DISPONIBLE' CHECK(operational_status IN ('DISPONIBLE', 'ASIGNADO', 'RESERVADO', 'DEVOLUCION_PENDIENTE', 'EN_REVISION', 'AVERIADO', 'DADO_DE_BAJA', 'PERDIDO')),
-  physical_condition VARCHAR(30) NOT NULL DEFAULT 'BUENO' CHECK(physical_condition IN ('NUEVO', 'BUENO', 'USADO', 'DANADO', 'AVERIADO', 'EN_REPARACION', 'NO_EVALUADO')),
+  operational_status VARCHAR(30) NOT NULL DEFAULT 'IN_WAREHOUSE' CHECK(operational_status IN (
+    'IN_WAREHOUSE', 'ASSIGNED', 'ASSIGNED_OBSERVATION', 'EXTERNAL_REPAIR', 'DECOMMISSIONED', 'LOST', 'RESERVED',
+    'DISPONIBLE', 'AVERIADO', 'DADO_DE_BAJA'
+  )),
+  physical_condition VARCHAR(30) NOT NULL DEFAULT 'BUENO' CHECK(physical_condition IN (
+    'NUEVO', 'BUENO', 'USADO', 'DANADO', 'AVERIADO', 'EN_REPARACION', 'NO_APLICA_DIGITAL', 'NO_EVALUADO'
+  )),
   purchase_date DATE,
   reception_date DATE,
   supplier VARCHAR(150),
@@ -168,22 +183,27 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   purchase_order VARCHAR(100),
   warranty_document_url TEXT,
   invoice_document_url TEXT,
+  invoice_file_id TEXT, -- Vínculo a stored_files
   notes TEXT,
   photo_url TEXT,
+  photo_file_id TEXT, -- Vínculo a stored_files
   is_broken SMALLINT DEFAULT 0,
   broken_notes TEXT,
   replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  qr_data TEXT, -- Contenido de la etiqueta QR
   registered_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  is_deleted SMALLINT DEFAULT 0,
+  deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 7. PESTAÑA DEDICADA DE CELULARES (LÍNEAS Y DISPOSITIVOS MÓVILES)
+-- 7. CELULARES Y LÍNEAS MÓVILES (CON TRAZABILIDAD DE CONTRATO Y CANCELADAS)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mobile_devices (
   id TEXT PRIMARY KEY,
-  device_code VARCHAR(40) UNIQUE NOT NULL,
+  device_code VARCHAR(40) UNIQUE NOT NULL, -- ej. CEL-001
   brand VARCHAR(100) NOT NULL,
   model VARCHAR(100) NOT NULL,
   employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
@@ -191,14 +211,19 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
   phone_number VARCHAR(50) NOT NULL,
   imei VARCHAR(50) UNIQUE NOT NULL,
   delivery_date DATE NOT NULL,
-  status VARCHAR(30) NOT NULL DEFAULT 'ASIGNADO' CHECK(status IN ('ASIGNADO', 'DISPONIBLE', 'DEVOLUCION_PENDIENTE', 'EN_REPARACION', 'DADO_DE_BAJA')),
+  contract_carrier VARCHAR(80) DEFAULT 'Claro', -- Claro, Tigo
+  contract_renewal_date DATE, -- Vencimiento de contrato
+  contract_status VARCHAR(30) DEFAULT 'ACTIVO' CHECK(contract_status IN ('ACTIVO', 'RENOVADO', 'POR_VENCER', 'CANCELADO')),
+  status VARCHAR(30) NOT NULL DEFAULT 'ASIGNADO' CHECK(status IN ('ASIGNADO', 'DISPONIBLE', 'DEVOLUCION_PENDIENTE', 'EN_REPARACION', 'DADO_DE_BAJA', 'CANCELADA')),
   notes_history TEXT DEFAULT '[]',
+  is_deleted SMALLINT DEFAULT 0,
+  deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 7.1 INVENTARIO POR VOLUMEN / CONSUMIBLES
+-- 7.1 CONSUMIBLES POR DEPARTAMENTO
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS consumable_stocks (
   id TEXT PRIMARY KEY,
@@ -213,7 +238,7 @@ CREATE TABLE IF NOT EXISTS consumable_stocks (
 );
 
 -- ----------------------------------------------------------------------------
--- 8. ASIGNACIONES A EMPLEADOS CON CÓDIGOS DE ENTREGA (AM-2026-LAPD-001)
+-- 8. ASIGNACIONES A EMPLEADOS CON CÓDIGOS FORMALES (AM-2026-IT-001)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY,
@@ -238,11 +263,15 @@ CREATE TABLE IF NOT EXISTS assignments (
 );
 
 -- ----------------------------------------------------------------------------
--- 9. ENTRADAS, SALIDAS Y MOVIMIENTOS (KARDEX AUDITABLE)
+-- 9. ENTRADAS Y MOVIMIENTOS (KARDEX CON SUSTITUCIÓN Y TRAZABILIDAD DE CONTRATOS)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS inventory_movements (
   id TEXT PRIMARY KEY,
-  movement_type VARCHAR(30) NOT NULL CHECK(movement_type IN ('RECEPCION', 'COMPRA', 'ENTRADA', 'ASIGNACION', 'TRANSFERENCIA', 'CONSUMO', 'DEVOLUCION', 'AJUSTE_AUTORIZADO', 'REPARACION', 'BAJA', 'PERDIDA')),
+  movement_type VARCHAR(30) NOT NULL CHECK(movement_type IN (
+    'RECEPCION', 'COMPRA', 'ENTRADA', 'ASIGNACION', 'TRANSFERENCIA', 'CONSUMO',
+    'DEVOLUCION', 'AJUSTE_AUTORIZADO', 'REPARACION', 'BAJA', 'PERDIDA',
+    'SUSTITUCION', 'RENOVACION_CONTRATO', 'CANCELACION_CONTRATO'
+  )),
   item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
   product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
   quantity NUMERIC(12,2) NOT NULL DEFAULT 1.0,
@@ -254,6 +283,9 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
   to_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
   from_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  replaced_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL, -- Para reemplazo manual
+  replacement_action VARCHAR(40), -- 'A_BODEGA', 'A_MANTENIMIENTO', 'BAJA'
+  contract_status_tag VARCHAR(30), -- 'RENOVADO', 'CANCELADO'
   reason TEXT NOT NULL,
   reference_code VARCHAR(100),
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -261,16 +293,18 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
 );
 
 -- ----------------------------------------------------------------------------
--- 10. AVERÍAS Y MANTENIMIENTO
+-- 10. MANTENIMIENTO Y REPARACIONES (FLUJO REPORTED -> IN_OBSERVATION -> SOLVED/BAJA)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS maintenance_records (
   id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
   reported_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  scheduled_date DATE,
+  scheduled_date DATE, -- Agendamiento de revisión o entrega en calendario
   reported_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  assigned_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL, -- Para período de observación
   fault_description TEXT NOT NULL,
   severity VARCHAR(30) NOT NULL DEFAULT 'MODERADA' CHECK(severity IN ('LEVE', 'MODERADA', 'CRITICA')),
+  stage VARCHAR(30) NOT NULL DEFAULT 'REPORTED' CHECK(stage IN ('REPORTED', 'IN_OBSERVATION', 'SOLVED', 'DECOMMISSIONED')),
   technician_supplier VARCHAR(150),
   repair_cost NUMERIC(12,2) DEFAULT 0.0,
   currency VARCHAR(10) DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),
@@ -279,20 +313,21 @@ CREATE TABLE IF NOT EXISTS maintenance_records (
   solution_type VARCHAR(40) CHECK(solution_type IN ('REPARACION_INTERNA', 'REPARACION_PROVEEDOR', 'COMPRA_REEMPLAZO', 'BAJA_SIN_REEMPLAZO') OR solution_type IS NULL),
   replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
   replacement_reason TEXT,
-  updates_json TEXT DEFAULT '[]',
+  updates_json TEXT DEFAULT '[]', -- Bitácora de procedimientos con fecha/hora
   resolved_date DATE,
   resolution_notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 11. CATEGORÍAS Y SERVICIOS DIGITALES (LICENCIAS, DOMINIOS, SAAS)
+-- 11. CATEGORÍAS Y SERVICIOS DIGITALES (LICENCIAS, SAAS Y ASIENTOS ASIGNADOS)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS license_categories (
   id TEXT PRIMARY KEY,
   name VARCHAR(150) UNIQUE NOT NULL,
   description TEXT,
   is_active SMALLINT DEFAULT 1,
+  is_archived SMALLINT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -321,21 +356,37 @@ CREATE TABLE IF NOT EXISTS digital_services (
   invoice_number VARCHAR(100),
   warranty_document_url TEXT,
   invoice_document_url TEXT,
+  invoice_file_id TEXT, -- Vínculo a stored_files
   assigned_users_text TEXT,
+  credentials_note TEXT, -- Campo protegido con notas de cuenta y credenciales
+  is_archived SMALLINT DEFAULT 0, -- Ocultar/archivar si caduca
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Asignación detallada de asientos de licencias por empleado
+CREATE TABLE IF NOT EXISTS license_assignments (
+  id TEXT PRIMARY KEY,
+  service_id TEXT NOT NULL REFERENCES digital_services(id) ON DELETE CASCADE,
+  employee_id TEXT REFERENCES employees(id) ON DELETE CASCADE,
+  assigned_email VARCHAR(180),
+  assigned_at TIMESTAMPTZ DEFAULT NOW(),
+  status VARCHAR(20) DEFAULT 'ACTIVO' CHECK(status IN ('ACTIVO', 'REVOCADO'))
+);
+
 -- ----------------------------------------------------------------------------
--- 12. REGISTROS DE COSTOS Y GASTOS (5 DIMENSIONES DE ÁREA)
+-- 12. REGISTROS DE COSTOS Y FACTURAS (MULTIDIVISA Y GARANTÍAS)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS cost_records (
   id TEXT PRIMARY KEY,
   item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
   product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
   digital_service_id TEXT REFERENCES digital_services(id) ON DELETE SET NULL,
-  cost_nature VARCHAR(40) NOT NULL CHECK(cost_nature IN ('ADQUISICION', 'ADICIONAL_FLETE_INSTALACION', 'REPOSICION_ESTIMADA', 'MANTENIMIENTO', 'LICENCIA_SUSCRIPCION', 'OPERATIVO')),
+  cost_nature VARCHAR(40) NOT NULL CHECK(cost_nature IN (
+    'ADQUISICION', 'ADICIONAL_FLETE_INSTALACION', 'REPOSICION_ESTIMADA',
+    'MANTENIMIENTO', 'LICENCIA_SUSCRIPCION', 'OPERATIVO'
+  )),
   concept VARCHAR(200) NOT NULL,
   amount NUMERIC(12,2) NOT NULL,
   tax_amount NUMERIC(12,2) DEFAULT 0.0,
@@ -344,6 +395,7 @@ CREATE TABLE IF NOT EXISTS cost_records (
   currency VARCHAR(10) DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),
   exchange_rate NUMERIC(12,4) DEFAULT 1.0,
   expense_date DATE NOT NULL,
+  warranty_end_date DATE, -- Vencimiento de garantía vinculada
   requesting_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   originating_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   recording_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
@@ -354,6 +406,7 @@ CREATE TABLE IF NOT EXISTS cost_records (
   purchase_order VARCHAR(100),
   warranty_document_url TEXT,
   invoice_document_url TEXT,
+  invoice_file_id TEXT, -- Referencia al archivo binario local en stored_files
   cost_center VARCHAR(50),
   status VARCHAR(40) DEFAULT 'CONFIRMADO',
   notes TEXT,
@@ -362,13 +415,13 @@ CREATE TABLE IF NOT EXISTS cost_records (
 );
 
 -- ----------------------------------------------------------------------------
--- 13. REPORTES PERSONALIZADOS GUARDADOS
+-- 13. REPORTES PERSONALIZADOS GUARDADOS (BI DATASETS)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS custom_reports (
   id TEXT PRIMARY KEY,
   name VARCHAR(150) NOT NULL,
   description TEXT,
-  module VARCHAR(30) NOT NULL CHECK(module IN ('INVENTARIO', 'CELULARES', 'MOVIMIENTOS', 'COSTOS', 'ASIGNACIONES', 'SERVICIOS', 'MANTENIMIENTO')),
+  module VARCHAR(30) NOT NULL CHECK(module IN ('INVENTARIO', 'CELULARES', 'MOVIMIENTOS', 'COSTOS', 'ASIGNACIONES', 'SERVICIOS', 'MANTENIMIENTO', 'EMPLEADOS')),
   columns_json TEXT NOT NULL DEFAULT '[]',
   filters_json TEXT NOT NULL DEFAULT '[]',
   group_by VARCHAR(80),
@@ -376,14 +429,14 @@ CREATE TABLE IF NOT EXISTS custom_reports (
   sort_direction VARCHAR(10) DEFAULT 'DESC',
   visualization_type VARCHAR(30) DEFAULT 'TABLE',
   date_range_preset VARCHAR(30) DEFAULT 'ALL',
-  allowed_roles_json TEXT DEFAULT '["ADMIN","SUBADMIN","AREA_MANAGER","VIEWER"]',
+  allowed_roles_json TEXT DEFAULT '["SUPERADMIN","ADMIN","SUBADMIN","AREA_MANAGER","VIEWER"]',
   created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- 14. AUDITORÍA INMUTABLE DEL SISTEMA
+-- 14. AUDITORÍA INMUTABLE DEL SISTEMA (CON INSPECCIÓN BEFORE/AFTER Y RESTAURACIÓN)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
@@ -411,24 +464,158 @@ CREATE TABLE IF NOT EXISTS system_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ============================================================================
+-- NUEVAS TABLAS ESTRATÉGICAS FPC: ACTAS QR, STORAGE LOCAL, RECORDATORIOS Y SYNC
+-- ============================================================================
+
 -- ----------------------------------------------------------------------------
--- ÍNDICES DE RENDIMIENTO
+-- 16. ACTAS DE ENTREGA LEGAL DE FPC CON FIRMA DIGITAL QR SIN APPS
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS handover_acts (
+  id TEXT PRIMARY KEY,
+  act_number VARCHAR(50) UNIQUE NOT NULL, -- ej. ACTA-2026-0001
+  employee_id TEXT NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+  qr_token VARCHAR(100) UNIQUE NOT NULL, -- Token temporal seguro para acceso desde navegador móvil
+  status VARCHAR(30) NOT NULL DEFAULT 'UNSIGNED' CHECK(status IN ('UNSIGNED', 'SIGNED', 'CANCELLED')),
+  generated_date DATE NOT NULL,
+  signed_at TIMESTAMPTZ,
+  signature_canvas_data TEXT, -- Trazo en base64 (HTML5 Canvas PNG)
+  signed_ip VARCHAR(50),
+  legal_template_text TEXT NOT NULL, -- Texto íntegro de las condiciones legales de FPC
+  delivery_observations TEXT,
+  pdf_storage_path TEXT,
+  created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Bienes y licencias vinculados al acta de entrega
+CREATE TABLE IF NOT EXISTS handover_act_items (
+  id TEXT PRIMARY KEY,
+  act_id TEXT NOT NULL REFERENCES handover_acts(id) ON DELETE CASCADE,
+  item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  digital_service_id TEXT REFERENCES digital_services(id) ON DELETE SET NULL,
+  item_description TEXT NOT NULL,
+  brand VARCHAR(100),
+  model VARCHAR(100),
+  serial_or_code VARCHAR(100) NOT NULL,
+  quantity NUMERIC(12,2) NOT NULL DEFAULT 1.0,
+  condition_status VARCHAR(30) NOT NULL DEFAULT 'Nuevo' CHECK(condition_status IN (
+    'Nuevo', 'Usado', 'Reparado', 'No aplica – digital'
+  )),
+  observations TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
+-- 17. ALMACENAMIENTO LOCAL DE ARCHIVOS (UPLOADS_DIR CON SHA-256 E INTEGRIDAD)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stored_files (
+  id TEXT PRIMARY KEY,
+  filename VARCHAR(255) NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  mime_type VARCHAR(100) NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256_hash VARCHAR(64) NOT NULL,
+  relative_path TEXT NOT NULL,
+  entity_type VARCHAR(50), -- 'ASSET', 'INVOICE', 'HANDOVER_ACT', 'LETTERHEAD', 'SIGNATURE'
+  entity_id TEXT,
+  uploaded_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
+-- 18. RECORDATORIOS PERSONALIZADOS EN TIEMPO REAL
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS custom_reminders (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(200) NOT NULL,
+  description TEXT,
+  due_date TIMESTAMPTZ NOT NULL,
+  is_completed SMALLINT DEFAULT 0,
+  priority VARCHAR(20) DEFAULT 'NORMAL' CHECK(priority IN ('BAJA', 'NORMAL', 'ALTA', 'URGENTE')),
+  target_module VARCHAR(50),
+  target_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
+-- 19. PROTOCOLO DE SINCRONIZACIÓN IDEMPOTENTE LOCAL-FIRST (HONOR 400 <-> SERVIDOR)
+-- ----------------------------------------------------------------------------
+
+-- Cola de salida local (usada en Android SQLite y replicada para control de auditoría)
+CREATE TABLE IF NOT EXISTS sync_outbox (
+  id TEXT PRIMARY KEY,
+  operation_uuid VARCHAR(64) UNIQUE NOT NULL,
+  entity_type VARCHAR(50) NOT NULL,
+  entity_id TEXT NOT NULL,
+  action_type VARCHAR(20) NOT NULL CHECK(action_type IN ('INSERT', 'UPDATE', 'DELETE')),
+  payload_json TEXT NOT NULL,
+  base_version INTEGER DEFAULT 1,
+  device_id VARCHAR(100),
+  user_id TEXT,
+  status VARCHAR(30) DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'SYNCING', 'SYNCED', 'FAILED', 'CONFLICT')),
+  created_at_local TEXT NOT NULL,
+  synced_at TIMESTAMPTZ,
+  error_message TEXT,
+  attachment_refs TEXT DEFAULT '[]'
+);
+
+-- Bitácora de operaciones procesadas por el servidor para garantizar idempotencia
+CREATE TABLE IF NOT EXISTS sync_operations_log (
+  id TEXT PRIMARY KEY,
+  operation_uuid VARCHAR(64) UNIQUE NOT NULL,
+  device_id VARCHAR(100),
+  user_id TEXT,
+  entity_type VARCHAR(50) NOT NULL,
+  entity_id TEXT NOT NULL,
+  action_type VARCHAR(20) NOT NULL,
+  processed_at TIMESTAMPTZ DEFAULT NOW(),
+  status VARCHAR(30) DEFAULT 'SUCCESS',
+  server_version INTEGER DEFAULT 1
+);
+
+-- Registro de conflictos para resolución administrativa no destructiva
+CREATE TABLE IF NOT EXISTS sync_conflicts (
+  id TEXT PRIMARY KEY,
+  operation_uuid VARCHAR(64) NOT NULL,
+  device_id VARCHAR(100),
+  user_id TEXT,
+  entity_type VARCHAR(50) NOT NULL,
+  entity_id TEXT NOT NULL,
+  conflict_type VARCHAR(50) NOT NULL,
+  local_payload_json TEXT,
+  server_payload_json TEXT,
+  resolution_status VARCHAR(30) DEFAULT 'PENDING' CHECK(resolution_status IN ('PENDING', 'RESOLVED_LOCAL', 'RESOLVED_SERVER', 'RESOLVED_MANUAL')),
+  resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
+-- ÍNDICES DE RENDIMIENTO Y CONCURRENCIA
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_items_permanent_code ON inventory_items(permanent_code);
 CREATE INDEX IF NOT EXISTS idx_items_dept ON inventory_items(current_department_id);
 CREATE INDEX IF NOT EXISTS idx_items_status ON inventory_items(operational_status);
+CREATE INDEX IF NOT EXISTS idx_items_employee ON inventory_items(current_employee_id);
 CREATE INDEX IF NOT EXISTS idx_celulares_imei ON mobile_devices(imei);
 CREATE INDEX IF NOT EXISTS idx_celulares_emp ON mobile_devices(employee_id);
+CREATE INDEX IF NOT EXISTS idx_celulares_status ON mobile_devices(status);
 CREATE INDEX IF NOT EXISTS idx_assignments_code ON assignments(assignment_code);
 CREATE INDEX IF NOT EXISTS idx_employees_code ON employees(employee_code);
 CREATE INDEX IF NOT EXISTS idx_movements_date ON inventory_movements(created_at);
 CREATE INDEX IF NOT EXISTS idx_costs_date ON cost_records(expense_date);
 CREATE INDEX IF NOT EXISTS idx_costs_charged_dept ON cost_records(charged_department_id);
-CREATE INDEX IF NOT EXISTS idx_costs_origin_dept ON cost_records(originating_department_id);
 CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_acts_token ON handover_acts(qr_token);
+CREATE INDEX IF NOT EXISTS idx_acts_emp ON handover_acts(employee_id);
+CREATE INDEX IF NOT EXISTS idx_stored_files_hash ON stored_files(sha256_hash);
+CREATE INDEX IF NOT EXISTS idx_sync_log_uuid ON sync_operations_log(operation_uuid);
+CREATE INDEX IF NOT EXISTS idx_sync_outbox_status ON sync_outbox(status);
 
 -- ----------------------------------------------------------------------------
--- TRIGGER DE INMUTABILIDAD EN AUDIT_LOGS
+-- DISPARADOR DE INMUTABILIDAD EN AUDIT_LOGS
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_audit_immutable()
 RETURNS TRIGGER AS $$
@@ -444,10 +631,10 @@ BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION fn_audit_immutable();
 
 -- ============================================================================
--- VISTAS ANALÍTICAS PARA GOOGLE LOOKER STUDIO (DATA STUDIO) & REPORTES SQL
+-- VISTAS ANALÍTICAS PARA GOOGLE LOOKER STUDIO / POWER BI / REPORTES SQL
 -- ============================================================================
 
--- 1. VISTA: INVENTARIO DE ACTIVOS FÍSICOS
+-- 1. VISTA: INVENTARIO DE ACTIVOS FÍSICOS (BODEGA Y ASIGNADOS)
 CREATE OR REPLACE VIEW vw_gds_inventory_assets AS
 SELECT 
   i.id AS asset_id,
@@ -480,9 +667,10 @@ JOIN products p ON i.product_id = p.id
 JOIN categories c ON p.category_id = c.id
 LEFT JOIN departments d ON i.current_department_id = d.id
 LEFT JOIN employees e ON i.current_employee_id = e.id
-LEFT JOIN users u ON i.current_assigned_user_id = u.id;
+LEFT JOIN users u ON i.current_assigned_user_id = u.id
+WHERE i.is_deleted = 0;
 
--- 2. VISTA: ANALÍTICA MULTIDIMENSIONAL DE COSTOS Y GASTOS (5 DIMENSIONES DE ÁREA)
+-- 2. VISTA: ANALÍTICA MULTIDIMENSIONAL DE COSTOS Y GASTOS (5 DIMENSIONES)
 CREATE OR REPLACE VIEW vw_gds_cost_analytics AS
 SELECT 
   cr.id AS cost_id,
@@ -497,20 +685,16 @@ SELECT
   cr.discount_amount AS discount_gtq,
   cr.total_amount AS total_gtq,
   cr.currency,
-  -- Dimensión 1: Área Solicitante
   req_d.name AS requesting_department,
-  -- Dimensión 2: Área Originadora del Gasto
   orig_d.name AS originating_department,
-  -- Dimensión 3: Área que Registró
   rec_d.name AS recording_department,
-  -- Dimensión 4: Área del Presupuesto
   bud_d.name AS budget_department,
-  -- Dimensión 5: Área Imputada (Asume el Costo)
   chg_d.name AS charged_department,
   chg_d.cost_center AS charged_cost_center,
   cr.supplier,
   cr.invoice_number,
   cr.purchase_order,
+  cr.warranty_end_date,
   cr.status,
   i.permanent_code AS related_asset_code,
   p.name AS related_product_name,
@@ -614,7 +798,8 @@ SELECT
 FROM digital_services ds
 LEFT JOIN license_categories lc ON ds.category_id = lc.id
 LEFT JOIN departments resp_d ON ds.responsible_department_id = resp_d.id
-LEFT JOIN departments chg_d ON ds.charged_department_id = chg_d.id;
+LEFT JOIN departments chg_d ON ds.charged_department_id = chg_d.id
+WHERE ds.is_archived = 0;
 
 -- 6. VISTA: TRANSACCIONES KARDEX AUDITABLES
 CREATE OR REPLACE VIEW vw_gds_kardex_movements AS
@@ -633,6 +818,9 @@ SELECT
   to_d.name AS target_department,
   COALESCE(from_e.full_name, from_u.full_name) AS source_entity,
   COALESCE(to_e.full_name, to_u.full_name) AS target_entity,
+  m.replaced_item_id,
+  m.replacement_action,
+  m.contract_status_tag,
   m.reason,
   m.reference_code,
   op_u.full_name AS performed_by_user
@@ -656,6 +844,9 @@ SELECT
   md.model,
   md.phone_number,
   md.imei,
+  md.contract_carrier,
+  md.contract_renewal_date,
+  md.contract_status,
   md.status,
   md.delivery_date,
   e.full_name AS assigned_employee_name,
@@ -663,4 +854,5 @@ SELECT
   d.name AS department_name
 FROM mobile_devices md
 LEFT JOIN employees e ON md.employee_id = e.id
-LEFT JOIN departments d ON md.department_id = d.id;
+LEFT JOIN departments d ON md.department_id = d.id
+WHERE md.is_deleted = 0;

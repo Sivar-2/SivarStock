@@ -5,6 +5,40 @@ import { cookies } from 'next/headers';
 
 const SESSION_SECRET = process.env.SESSION_SECRET || 'sivarstock_enterprise_secure_salt_key_2026';
 
+export interface UserAllowedActions {
+  can_read: boolean;
+  can_write: boolean;
+  can_delete: boolean;
+  can_export: boolean;
+  can_view_financials: boolean;
+}
+
+export interface UserSession {
+  id: string;
+  username: string;
+  fullName: string;
+  email: string;
+  role: 'SUPERADMIN' | 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'OPERATOR' | 'VIEWER';
+  isSuperAdmin: boolean;
+  departmentId: string | null;
+  departmentCode: string | null;
+  departmentName: string | null;
+  initials: string;
+  canViewFinancials: boolean;
+  canExport: boolean;
+  canManageUsers: boolean;
+  canEdit: boolean;
+  allowedTabs: string[];
+  allowedActions: UserAllowedActions;
+  allowedDepartments: string[];
+  onlyOwnDepartment: boolean;
+  quickAccessEnabled: boolean;
+  hasPin: boolean;
+}
+
+/**
+ * Firma criptográfica de tokens con HMAC-SHA256
+ */
 export function signSessionToken(payload: object): string {
   const json = JSON.stringify(payload);
   const b64Payload = Buffer.from(json, 'utf8').toString('base64');
@@ -36,35 +70,52 @@ export function decodeSessionToken(token: string): any | null {
   }
 }
 
-export interface UserSession {
-  id: string;
-  username: string;
-  fullName: string;
-  email: string;
-  role: 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'VIEWER';
-  departmentId: string | null;
-  departmentCode: string | null;
-  departmentName: string | null;
-  initials: string;
-  canViewFinancials: boolean;
-  canExport: boolean;
-  canManageUsers: boolean;
-  canEdit: boolean;
-  allowedTabs: string[];
-  onlyOwnDepartment: boolean;
+/**
+ * Tokens de desafío temporal para validación en 2 pasos de PIN (expira en 5 minutos)
+ */
+export function signPinChallenge(payload: { userId: string; username: string; exp: number }): string {
+  return signSessionToken({ ...payload, isPinChallenge: true });
 }
 
+export function decodePinChallenge(token: string): { userId: string; username: string; exp: number } | null {
+  const decoded = decodeSessionToken(token);
+  if (!decoded || !decoded.isPinChallenge || !decoded.userId || !decoded.exp) {
+    return null;
+  }
+  if (Date.now() > decoded.exp) {
+    return null; // Expirado
+  }
+  return decoded;
+}
+
+/**
+ * Funciones de Hash y Verificación de Contraseñas
+ */
 export async function hashPassword(password: string): Promise<string> {
   const salt = await bcrypt.genSalt(10);
   return bcrypt.hash(password, salt);
 }
 
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  if (!password || !hash) return false;
   return bcrypt.compare(password, hash);
 }
 
 /**
- * Obtiene el usuario de la sesión actual basado en la cookie segura
+ * Funciones de Hash y Verificación de PIN de 4 dígitos
+ */
+export async function hashPin(pin: string): Promise<string> {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(pin.trim(), salt);
+}
+
+export async function verifyPin(pin: string, hash: string | null | undefined): Promise<boolean> {
+  if (!pin || !hash) return false;
+  return bcrypt.compare(pin.trim(), hash);
+}
+
+/**
+ * Obtiene el usuario de la sesión actual basado en la cookie segura sivarstock_session
  */
 export async function getCurrentUser(): Promise<UserSession | null> {
   try {
@@ -82,7 +133,8 @@ export async function getCurrentUser(): Promise<UserSession | null> {
     const row = await queryOne<any>(
       `SELECT u.id, u.username, u.full_name, u.email, u.role, u.department_id, 
               u.initials, u.can_view_financials, u.can_export, u.can_manage_users, u.can_edit,
-              u.allowed_tabs_json, u.only_own_department,
+              u.allowed_tabs_json, u.allowed_actions_json, u.allowed_departments_json,
+              u.only_own_department, u.pin_hash, u.quick_access_enabled,
               d.code as department_code, d.name as department_name
        FROM users u
        LEFT JOIN departments d ON u.department_id = d.id
@@ -92,6 +144,9 @@ export async function getCurrentUser(): Promise<UserSession | null> {
 
     if (!row) return null;
 
+    const isSuperAdmin = row.role === 'SUPERADMIN' || row.username === 'TurcoSivar';
+
+    // Parsear pestañas permitidas
     let allowedTabs: string[] = [];
     try {
       allowedTabs = row.allowed_tabs_json ? JSON.parse(row.allowed_tabs_json) : [];
@@ -99,17 +154,96 @@ export async function getCurrentUser(): Promise<UserSession | null> {
       allowedTabs = ['DASHBOARD', 'INVENTARIO', 'CELULARES', 'PRODUCTOS'];
     }
 
-    // Regla estricta 1: MOVIMIENTOS y AUDITORIA son EXCLUSIVOS del rol ADMIN.
-    // Para cualquier otro rol, se ocultan de sus allowedTabs.
+    // Parsear acciones granulares
+    let allowedActions: UserAllowedActions = {
+      can_read: true,
+      can_write: Boolean(row.can_edit),
+      can_delete: false,
+      can_export: Boolean(row.can_export),
+      can_view_financials: Boolean(row.can_view_financials),
+    };
+    if (row.allowed_actions_json) {
+      try {
+        const parsed = JSON.parse(row.allowed_actions_json);
+        allowedActions = {
+          can_read: parsed.can_read !== undefined ? Boolean(parsed.can_read) : true,
+          can_write: parsed.can_write !== undefined ? Boolean(parsed.can_write) : Boolean(row.can_edit),
+          can_delete: parsed.can_delete !== undefined ? Boolean(parsed.can_delete) : false,
+          can_export: parsed.can_export !== undefined ? Boolean(parsed.can_export) : Boolean(row.can_export),
+          can_view_financials: parsed.can_view_financials !== undefined ? Boolean(parsed.can_view_financials) : Boolean(row.can_view_financials),
+        };
+      } catch {
+        // Fallback a los flags nativos
+      }
+    }
+
+    // Parsear departamentos permitidos
+    let allowedDepartments: string[] = [];
+    try {
+      allowedDepartments = row.allowed_departments_json ? JSON.parse(row.allowed_departments_json) : [];
+    } catch {
+      allowedDepartments = row.department_id ? [row.department_id] : [];
+    }
+
+    // Super Admin: Acceso total irrestricto absoluto
+    if (isSuperAdmin) {
+      allowedTabs = [
+        'DASHBOARD', 'INVENTARIO', 'CELULARES', 'PRODUCTOS', 'MOVIMIENTOS',
+        'ASIGNACIONES', 'MANTENIMIENTO', 'SERVICIOS', 'COSTOS', 'REPORTES',
+        'DEPARTAMENTOS', 'PERMISOS', 'USUARIOS', 'AUDITORIA', 'CONFIGURACION'
+      ];
+      allowedActions = {
+        can_read: true,
+        can_write: true,
+        can_delete: true,
+        can_export: true,
+        can_view_financials: true,
+      };
+      allowedDepartments = ['*'];
+
+      return {
+        id: row.id,
+        username: row.username,
+        fullName: row.full_name,
+        email: row.email,
+        role: 'SUPERADMIN',
+        isSuperAdmin: true,
+        departmentId: row.department_id,
+        departmentCode: row.department_code,
+        departmentName: row.department_name,
+        initials: row.initials || 'TS',
+        canViewFinancials: true,
+        canExport: true,
+        canManageUsers: true,
+        canEdit: true,
+        allowedTabs,
+        allowedActions,
+        allowedDepartments,
+        onlyOwnDepartment: false,
+        quickAccessEnabled: Boolean(row.quick_access_enabled),
+        hasPin: Boolean(row.pin_hash),
+      };
+    }
+
+    // Para cualquier otro rol, "PERMISOS" y "USUARIOS" son exclusivos de Super Admin
+    allowedTabs = allowedTabs.filter(
+      (tab: string) => tab !== 'PERMISOS' && tab !== 'USUARIOS'
+    );
+
+    // MOVIMIENTOS y AUDITORIA son exclusivos de ADMIN y SUPERADMIN
     if (row.role !== 'ADMIN') {
       allowedTabs = allowedTabs.filter(
-        (tab: string) => tab !== 'MOVIMIENTOS' && tab !== 'AUDITORIA' && tab !== 'USUARIOS'
+        (tab: string) => tab !== 'MOVIMIENTOS' && tab !== 'AUDITORIA'
       );
     }
 
-    // Regla estricta 2: El rol VIEWER tiene canEdit = false forzado en el servidor
+    // Rol VIEWER: edición deshabilitada siempre
     const isViewer = row.role === 'VIEWER';
-    const canEdit = isViewer ? false : Boolean(row.can_edit);
+    const canEdit = isViewer ? false : Boolean(row.can_edit && allowedActions.can_write);
+    if (isViewer) {
+      allowedActions.can_write = false;
+      allowedActions.can_delete = false;
+    }
 
     return {
       id: row.id,
@@ -117,16 +251,21 @@ export async function getCurrentUser(): Promise<UserSession | null> {
       fullName: row.full_name,
       email: row.email,
       role: row.role,
+      isSuperAdmin: false,
       departmentId: row.department_id,
       departmentCode: row.department_code,
       departmentName: row.department_name,
       initials: row.initials,
-      canViewFinancials: Boolean(row.can_view_financials),
-      canExport: Boolean(row.can_export),
+      canViewFinancials: Boolean(row.can_view_financials && allowedActions.can_view_financials),
+      canExport: Boolean(row.can_export && allowedActions.can_export),
       canManageUsers: Boolean(row.can_manage_users || row.role === 'ADMIN'),
       canEdit,
       allowedTabs,
+      allowedActions,
+      allowedDepartments,
       onlyOwnDepartment: Boolean(row.only_own_department),
+      quickAccessEnabled: Boolean(row.quick_access_enabled),
+      hasPin: Boolean(row.pin_hash),
     };
   } catch (error) {
     console.error('Error al obtener usuario de sesión:', error);
@@ -135,12 +274,17 @@ export async function getCurrentUser(): Promise<UserSession | null> {
 }
 
 /**
+ * Alias getSession() requerido por las reglas de SivarStock
+ */
+export const getSession = getCurrentUser;
+
+/**
  * Función central de autorización RBAC por Módulo y Modo (READ, WRITE, DELETE).
- * - ADMIN: acceso total irrestricto.
- * - MOVIMIENTOS y AUDITORIA: Exclusivos de ADMIN (retorna false para cualquier otro rol).
- * - VIEWER: forzado canEdit = false, sólo puede READ en sus pestañas permitidas.
- * - SUBADMIN (CEO): con canEdit = true puede crear y editar productos en /api/products
- *   e ítems en /api/inventory/items según sus allowedTabs.
+ * - SUPERADMIN (TurcoSivar): acceso total e irrestricto.
+ * - PERMISOS / USUARIOS: Exclusivo de SUPERADMIN.
+ * - MOVIMIENTOS y AUDITORIA: Exclusivos de SUPERADMIN y ADMIN.
+ * - VIEWER: solo puede READ en sus pestañas permitidas.
+ * - SUBADMIN / OPERATOR: según allowedTabs y allowedActions.
  */
 export function canAccessModule(
   user: UserSession | null,
@@ -148,16 +292,23 @@ export function canAccessModule(
   mode: 'READ' | 'WRITE' | 'DELETE' = 'READ'
 ): boolean {
   if (!user) return false;
-  if (user.role === 'ADMIN') return true;
+  if (user.isSuperAdmin || user.role === 'SUPERADMIN' || user.username === 'TurcoSivar') {
+    return true;
+  }
 
   const mod = moduleName.toUpperCase().trim();
 
-  // Regla estricta 1: MOVIMIENTOS y AUDITORIA exclusivos de ADMIN
-  if (mod === 'MOVIMIENTOS' || mod === 'AUDITORIA') {
+  // Gestión de Permisos / Usuarios exclusiva de SUPERADMIN
+  if (mod === 'PERMISOS' || mod === 'USUARIOS') {
     return false;
   }
 
-  // Regla estricta 2: VIEWER nunca puede escribir ni eliminar
+  // MOVIMIENTOS y AUDITORIA exclusivos de ADMIN o SUPERADMIN
+  if (mod === 'MOVIMIENTOS' || mod === 'AUDITORIA') {
+    if (user.role !== 'ADMIN') return false;
+  }
+
+  // VIEWER nunca puede escribir ni eliminar
   if (user.role === 'VIEWER') {
     if (mode === 'WRITE' || mode === 'DELETE') return false;
     return user.allowedTabs.includes(mod);
@@ -168,35 +319,30 @@ export function canAccessModule(
     return false;
   }
 
-  // Para lectura basta con tener la pestaña habilitada
+  // Lectura
   if (mode === 'READ') {
-    return true;
+    return user.allowedActions.can_read;
   }
 
-  // Si requiere escritura o borrado, validar canEdit
-  if (!user.canEdit) {
-    return false;
+  // Escritura
+  if (mode === 'WRITE') {
+    return user.canEdit && user.allowedActions.can_write;
   }
 
-  // Para borrado (DELETE):
+  // Eliminación
   if (mode === 'DELETE') {
-    // Solo ADMIN puede borrar empleados o usuarios
-    if (mod === 'EMPLEADOS' || mod === 'DEPARTAMENTOS' || mod === 'USUARIOS') {
-      return false;
+    if (!user.allowedActions.can_delete) return false;
+    if (mod === 'EMPLEADOS' || mod === 'DEPARTAMENTOS' || mod === 'CONFIGURACION') {
+      return user.role === 'ADMIN';
     }
-    // SUBADMIN con canEdit puede borrar en PRODUCTOS o INVENTARIO
-    if (user.role === 'SUBADMIN') {
-      return mod === 'PRODUCTOS' || mod === 'INVENTARIO' || mod === 'CELULARES';
-    }
-    return false;
+    return true;
   }
 
   return true;
 }
 
 /**
- * Helper rápido para rutas API: valida que el usuario no sea VIEWER ni tenga canEdit deshabilitado.
- * Retorna mensaje de error si está denegado, o null si está autorizado.
+ * Helper para validar permisos de escritura en rutas API
  */
 export function validateApiWritePermission(
   user: UserSession | null,
@@ -206,9 +352,13 @@ export function validateApiWritePermission(
     return { error: 'No autorizado: Sesión requerida', status: 401 };
   }
 
-  if (user.role === 'VIEWER' || !user.canEdit) {
+  if (user.isSuperAdmin) {
+    return null;
+  }
+
+  if (user.role === 'VIEWER' || !user.canEdit || !user.allowedActions.can_write) {
     return {
-      error: 'Acceso denegado: El rol Lector (VIEWER) tiene permisos de edición desactivados en el servidor.',
+      error: 'Acceso denegado: El usuario no posee permisos de edición/escritura asignados.',
       status: 403,
     };
   }
@@ -224,21 +374,29 @@ export function validateApiWritePermission(
 }
 
 /**
- * Validadores de Autorización para Server Actions y API Routes
+ * Validadores de Rol y Departamento
  */
 export function checkPermission(
   user: UserSession | null, 
-  requiredRole?: 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'VIEWER'
+  requiredRole?: 'SUPERADMIN' | 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'OPERATOR' | 'VIEWER'
 ): boolean {
   if (!user) return false;
-  if (user.role === 'ADMIN') return true;
+  if (user.isSuperAdmin || user.role === 'SUPERADMIN' || user.username === 'TurcoSivar') return true;
+
+  if (requiredRole === 'SUPERADMIN') {
+    return false;
+  }
+
+  if (requiredRole === 'ADMIN') {
+    return user.role === 'ADMIN';
+  }
 
   if (requiredRole === 'SUBADMIN') {
-    return user.role === 'SUBADMIN';
+    return user.role === 'ADMIN' || user.role === 'SUBADMIN';
   }
 
   if (requiredRole === 'AREA_MANAGER') {
-    return user.role === 'SUBADMIN' || user.role === 'AREA_MANAGER';
+    return user.role === 'ADMIN' || user.role === 'SUBADMIN' || user.role === 'AREA_MANAGER';
   }
 
   return true;
@@ -246,7 +404,20 @@ export function checkPermission(
 
 export function canAccessDepartment(user: UserSession | null, departmentId?: string | null): boolean {
   if (!user) return false;
-  if (user.role === 'ADMIN' || user.role === 'SUBADMIN') return true;
+  if (user.isSuperAdmin || user.role === 'ADMIN') return true;
   if (!departmentId) return true;
+
+  if (user.allowedDepartments && user.allowedDepartments.includes('*')) {
+    return true;
+  }
+
+  if (user.allowedDepartments && user.allowedDepartments.includes(departmentId)) {
+    return true;
+  }
+
+  if (!user.onlyOwnDepartment && (!user.allowedDepartments || user.allowedDepartments.length === 0)) {
+    return true;
+  }
+
   return user.departmentId === departmentId;
 }

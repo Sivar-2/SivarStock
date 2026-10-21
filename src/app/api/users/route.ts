@@ -1,12 +1,25 @@
 import { NextResponse, NextRequest } from 'next/server';
-import { query, queryOne, execute } from '@/lib/db';
-import { getCurrentUser, hashPassword } from '@/lib/auth';
+import { query, queryOne, run } from '@/lib/db';
+import { getSession, hashPassword, hashPin } from '@/lib/auth';
+import { logAudit } from '@/lib/audit';
 
-export async function GET() {
+function checkSuperAdminAccess(user: any): boolean {
+  if (!user) return false;
+  return Boolean(
+    user.isSuperAdmin ||
+    user.role === 'SUPERADMIN' ||
+    user.username === 'TurcoSivar'
+  );
+}
+
+export async function GET(request: NextRequest) {
   try {
-    const user = await getCurrentUser();
-    if (!user || user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Solo el administrador puede gestionar usuarios y permisos.' }, { status: 403 });
+    const session = await getSession();
+    if (!checkSuperAdminAccess(session)) {
+      return NextResponse.json(
+        { error: 'Acceso restringido: Solo el Super Administrador (TurcoSivar) tiene autorización para gestionar permisos.' },
+        { status: 403 }
+      );
     }
 
     const users = await query<any>(`
@@ -20,10 +33,14 @@ export async function GET() {
         u.employee_id,
         u.initials,
         u.allowed_tabs_json,
+        u.allowed_actions_json,
+        u.allowed_departments_json,
         u.only_own_department,
         u.can_view_financials,
         u.can_export,
         u.can_edit,
+        u.quick_access_enabled,
+        CASE WHEN u.pin_hash IS NOT NULL AND u.pin_hash != '' THEN 1 ELSE 0 END as has_pin,
         u.is_active,
         u.created_at,
         d.name as department_name,
@@ -33,7 +50,12 @@ export async function GET() {
       LEFT JOIN departments d ON u.department_id = d.id
       LEFT JOIN employees e ON u.employee_id = e.id
       ORDER BY 
-        CASE WHEN u.role = 'ADMIN' THEN 1 WHEN u.role = 'SUBADMIN' THEN 2 ELSE 3 END,
+        CASE 
+          WHEN u.username = 'TurcoSivar' OR u.role = 'SUPERADMIN' THEN 1 
+          WHEN u.role = 'ADMIN' THEN 2 
+          WHEN u.role = 'SUBADMIN' THEN 3 
+          ELSE 4 
+        END,
         u.full_name ASC
     `);
 
@@ -44,29 +66,74 @@ export async function GET() {
       } catch {
         allowedTabs = [];
       }
+
+      let allowedActions = {
+        can_read: true,
+        can_write: Boolean(u.can_edit),
+        can_delete: false,
+        can_export: Boolean(u.can_export),
+        can_view_financials: Boolean(u.can_view_financials),
+      };
+      try {
+        if (u.allowed_actions_json) {
+          const parsed = JSON.parse(u.allowed_actions_json);
+          allowedActions = {
+            can_read: parsed.can_read !== undefined ? Boolean(parsed.can_read) : true,
+            can_write: parsed.can_write !== undefined ? Boolean(parsed.can_write) : Boolean(u.can_edit),
+            can_delete: parsed.can_delete !== undefined ? Boolean(parsed.can_delete) : false,
+            can_export: parsed.can_export !== undefined ? Boolean(parsed.can_export) : Boolean(u.can_export),
+            can_view_financials: parsed.can_view_financials !== undefined ? Boolean(parsed.can_view_financials) : Boolean(u.can_view_financials),
+          };
+        }
+      } catch {}
+
+      let allowedDepartments: string[] = [];
+      try {
+        allowedDepartments = u.allowed_departments_json ? JSON.parse(u.allowed_departments_json) : [];
+      } catch {}
+
       return {
-        ...u,
+        id: u.id,
+        username: u.username,
+        full_name: u.full_name,
+        email: u.email,
+        role: u.role,
+        department_id: u.department_id,
+        department_name: u.department_name,
+        department_code: u.department_code,
+        employee_id: u.employee_id,
+        employee_code: u.employee_code,
+        initials: u.initials,
         allowedTabs,
+        allowedActions,
+        allowedDepartments,
         only_own_department: Boolean(u.only_own_department),
         can_view_financials: Boolean(u.can_view_financials),
         can_export: Boolean(u.can_export),
         can_edit: Boolean(u.can_edit),
+        quick_access_enabled: Boolean(u.quick_access_enabled),
+        has_pin: Boolean(u.has_pin),
         is_active: Boolean(u.is_active),
+        created_at: u.created_at,
+        is_super_admin: u.username === 'TurcoSivar' || u.role === 'SUPERADMIN',
       };
     });
 
     return NextResponse.json({ success: true, users: formattedUsers });
   } catch (error: any) {
-    console.error('Error fetching users:', error);
-    return NextResponse.json({ error: 'Error al consultar usuarios.' }, { status: 500 });
+    console.error('Error al listar usuarios:', error);
+    return NextResponse.json({ error: 'Error interno al consultar usuarios.' }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const currentUser = await getCurrentUser();
-    if (!currentUser || currentUser.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Solo el administrador puede crear usuarios.' }, { status: 403 });
+    const session = await getSession();
+    if (!checkSuperAdminAccess(session)) {
+      return NextResponse.json(
+        { error: 'Acceso restringido: Solo el Super Administrador (TurcoSivar) puede crear nuevos usuarios.' },
+        { status: 403 }
+      );
     }
 
     const body = await request.json();
@@ -75,85 +142,122 @@ export async function POST(request: NextRequest) {
       full_name,
       email,
       password,
-      role = 'AREA_MANAGER',
+      pin,
+      role = 'OPERATOR',
       department_id,
       employee_id,
       allowedTabs = ['DASHBOARD', 'INVENTARIO', 'PRODUCTOS'],
+      allowedActions = { can_read: 1, can_write: 1, can_delete: 0, can_export: 1, can_view_financials: 0 },
+      allowedDepartments = [],
       only_own_department = false,
       can_view_financials = false,
-      can_export = false,
+      can_export = true,
       can_edit = true,
     } = body;
 
     if (!username || !full_name || !email || !password) {
-      return NextResponse.json({ error: 'Usuario, nombre, correo y contraseña son obligatorios.' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Usuario, nombre completo, correo y contraseña son campos obligatorios.' },
+        { status: 400 }
+      );
     }
 
-    // Comprobar unicidad
-    const existing = await queryOne<any>('SELECT id FROM users WHERE username = ? OR email = ?', [username, email]);
+    // Verificar unicidad de username y email
+    const existing = await queryOne<any>(
+      'SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?',
+      [username.trim().toLowerCase(), email.trim().toLowerCase()]
+    );
     if (existing) {
-      return NextResponse.json({ error: 'El nombre de usuario o correo electrónico ya está registrado.' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'El nombre de usuario o correo electrónico ya está registrado.' },
+        { status: 400 }
+      );
     }
 
     const initials = full_name
-      .split(' ')
+      .trim()
+      .split(/\s+/)
       .map((w: string) => w[0])
       .join('')
       .substring(0, 3)
       .toUpperCase();
 
     const passwordHash = await hashPassword(password);
-    const id = `USR-${Date.now()}`;
-    const allowedTabsJson = JSON.stringify(allowedTabs);
+    let pinHash: string | null = null;
+    if (pin && typeof pin === 'string' && pin.trim().length === 4) {
+      pinHash = await hashPin(pin.trim());
+    }
 
-    await execute(
+    const id = `usr-${Date.now()}`;
+    const allowedTabsJson = JSON.stringify(allowedTabs);
+    const allowedActionsJson = JSON.stringify(allowedActions);
+    const allowedDepartmentsJson = JSON.stringify(allowedDepartments);
+
+    await run(
       `INSERT INTO users (
-        id, username, full_name, email, password_hash, role,
-        department_id, employee_id, initials, allowed_tabs_json,
-        only_own_department, can_view_financials, can_export, can_edit, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        id, username, full_name, email, password_hash, pin_hash, quick_access_enabled,
+        role, department_id, employee_id, initials, allowed_tabs_json, allowed_actions_json,
+        allowed_departments_json, only_own_department, can_view_financials, can_export,
+        can_manage_users, can_edit, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         id,
         username.trim().toLowerCase(),
         full_name.trim(),
         email.trim().toLowerCase(),
         passwordHash,
+        pinHash,
         role,
         department_id || null,
         employee_id || null,
         initials,
         allowedTabsJson,
+        allowedActionsJson,
+        allowedDepartmentsJson,
         only_own_department ? 1 : 0,
         can_view_financials ? 1 : 0,
         can_export ? 1 : 0,
+        role === 'SUPERADMIN' || role === 'ADMIN' ? 1 : 0,
         can_edit ? 1 : 0,
       ]
     );
 
-    // Auditoría
-    await execute(
-      `INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, details_json)
-       VALUES (?, ?, 'USER_CREATED', 'users', ?, ?)`,
-      [
-        `AUD-${Date.now()}`,
-        currentUser.id,
-        id,
-        JSON.stringify({ username, role, department_id, allowedTabs, only_own_department }),
-      ]
-    );
+    // Auditoría centralizada
+    await logAudit({
+      userId: session?.id,
+      username: session?.username || 'TurcoSivar',
+      userRole: session?.role || 'SUPERADMIN',
+      action: 'USER_CREATED',
+      module: 'PERMISOS',
+      entityId: id,
+      entityName: full_name.trim(),
+      afterState: { username, role, department_id, allowedTabs, allowedActions },
+      reason: 'Creación de usuario con permisos personalizados RBAC',
+      ipAddress: request.headers.get('x-forwarded-for') || '127.0.0.1',
+    });
 
-    return NextResponse.json({ success: true, id, message: 'Usuario creado exitosamente con permisos personalizados.' });
+    return NextResponse.json({
+      success: true,
+      id,
+      message: 'Usuario y permisos creados exitosamente en el sistema.',
+    });
   } catch (error: any) {
-    console.error('Error creating user:', error);
-    return NextResponse.json({ error: error.message || 'Error al crear usuario.' }, { status: 500 });
+    console.error('Error al crear usuario:', error);
+    return NextResponse.json(
+      { error: error.message || 'Error interno al registrar usuario.' },
+      { status: 500 }
+    );
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
-    const currentUser = await getCurrentUser();
-    if (!currentUser || currentUser.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Solo el administrador puede modificar permisos de usuarios.' }, { status: 403 });
+    const session = await getSession();
+    if (!checkSuperAdminAccess(session)) {
+      return NextResponse.json(
+        { error: 'Acceso restringido: Solo el Super Administrador (TurcoSivar) puede modificar permisos de usuarios.' },
+        { status: 403 }
+      );
     }
 
     const body = await request.json();
@@ -162,9 +266,12 @@ export async function PUT(request: NextRequest) {
       full_name,
       email,
       password,
+      pin,
       role,
       department_id,
       allowedTabs,
+      allowedActions,
+      allowedDepartments,
       only_own_department,
       can_view_financials,
       can_export,
@@ -176,114 +283,163 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'ID de usuario requerido.' }, { status: 400 });
     }
 
-    const user = await queryOne<any>('SELECT * FROM users WHERE id = ?', [id]);
-    if (!user) {
+    const existingUser = await queryOne<any>('SELECT * FROM users WHERE id = ?', [id]);
+    if (!existingUser) {
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 });
     }
 
-    // Protección para el administrador principal
-    if (user.email === 'alexander7tm@gmail.com' && (is_active === false || role !== 'ADMIN')) {
-      return NextResponse.json({ error: 'El administrador principal alexander7tm@gmail.com no puede ser desactivado ni degradado.' }, { status: 400 });
+    // Regla de Protección Inmutable para Master Super Admin TurcoSivar
+    const isMasterTurcoSivar = existingUser.username === 'TurcoSivar' || existingUser.id === 'usr-turcosivar';
+    if (isMasterTurcoSivar) {
+      if (is_active === false || is_active === 0) {
+        return NextResponse.json(
+          { error: 'El Master Super Admin "TurcoSivar" no puede ser desactivado.' },
+          { status: 400 }
+        );
+      }
+      if (role && role !== 'SUPERADMIN') {
+        return NextResponse.json(
+          { error: 'El Master Super Admin "TurcoSivar" no puede ser degradado de rol.' },
+          { status: 400 }
+        );
+      }
     }
 
-    let passwordClause = '';
-    const params: any[] = [
-      full_name || user.full_name,
-      email || user.email,
-      role || user.role,
-      department_id !== undefined ? department_id : user.department_id,
-      allowedTabs ? JSON.stringify(allowedTabs) : user.allowed_tabs_json,
-      only_own_department !== undefined ? (only_own_department ? 1 : 0) : user.only_own_department,
-      can_view_financials !== undefined ? (can_view_financials ? 1 : 0) : user.can_view_financials,
-      can_export !== undefined ? (can_export ? 1 : 0) : user.can_export,
-      can_edit !== undefined ? (can_edit ? 1 : 0) : user.can_edit,
-      is_active !== undefined ? (is_active ? 1 : 0) : user.is_active,
-    ];
-
-    if (password && password.trim().length >= 6) {
-      const passwordHash = await hashPassword(password);
-      passwordClause = ', password_hash = ?';
-      params.push(passwordHash);
+    let passwordHash = existingUser.password_hash;
+    if (password && typeof password === 'string' && password.trim().length >= 6) {
+      passwordHash = await hashPassword(password.trim());
     }
 
-    params.push(id);
+    let pinHash = existingUser.pin_hash;
+    if (pin !== undefined) {
+      if (pin && typeof pin === 'string' && pin.trim().length === 4) {
+        pinHash = await hashPin(pin.trim());
+      } else if (pin === '' || pin === null) {
+        pinHash = null;
+      }
+    }
 
-    await execute(
-      `UPDATE users SET 
-        full_name = ?, 
-        email = ?, 
-        role = ?, 
-        department_id = ?, 
-        allowed_tabs_json = ?, 
-        only_own_department = ?, 
-        can_view_financials = ?, 
-        can_export = ?, 
-        can_edit = ?, 
+    const updatedAllowedTabs = allowedTabs ? JSON.stringify(allowedTabs) : existingUser.allowed_tabs_json;
+    const updatedAllowedActions = allowedActions ? JSON.stringify(allowedActions) : existingUser.allowed_actions_json;
+    const updatedAllowedDepartments = allowedDepartments ? JSON.stringify(allowedDepartments) : existingUser.allowed_departments_json;
+
+    await run(
+      `UPDATE users SET
+        full_name = ?,
+        email = ?,
+        password_hash = ?,
+        pin_hash = ?,
+        role = ?,
+        department_id = ?,
+        allowed_tabs_json = ?,
+        allowed_actions_json = ?,
+        allowed_departments_json = ?,
+        only_own_department = ?,
+        can_view_financials = ?,
+        can_export = ?,
+        can_edit = ?,
         is_active = ?
-        ${passwordClause}
        WHERE id = ?`,
-      params
-    );
-
-    // Auditoría
-    await execute(
-      `INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, details_json)
-       VALUES (?, ?, 'USER_UPDATED', 'users', ?, ?)`,
       [
-        `AUD-${Date.now()}`,
-        currentUser.id,
+        full_name || existingUser.full_name,
+        email || existingUser.email,
+        passwordHash,
+        pinHash,
+        role || existingUser.role,
+        department_id !== undefined ? department_id : existingUser.department_id,
+        updatedAllowedTabs,
+        updatedAllowedActions,
+        updatedAllowedDepartments,
+        only_own_department !== undefined ? (only_own_department ? 1 : 0) : existingUser.only_own_department,
+        can_view_financials !== undefined ? (can_view_financials ? 1 : 0) : existingUser.can_view_financials,
+        can_export !== undefined ? (can_export ? 1 : 0) : existingUser.can_export,
+        can_edit !== undefined ? (can_edit ? 1 : 0) : existingUser.can_edit,
+        is_active !== undefined ? (is_active ? 1 : 0) : existingUser.is_active,
         id,
-        JSON.stringify({ updatedBy: currentUser.email, role, department_id, allowedTabs, only_own_department }),
       ]
     );
 
-    return NextResponse.json({ success: true, message: 'Permisos actualizados con éxito.' });
+    // Auditoría centralizada
+    await logAudit({
+      userId: session?.id,
+      username: session?.username || 'TurcoSivar',
+      userRole: session?.role || 'SUPERADMIN',
+      action: 'USER_UPDATED',
+      module: 'PERMISOS',
+      entityId: id,
+      entityName: full_name || existingUser.full_name,
+      beforeState: { role: existingUser.role, is_active: existingUser.is_active },
+      afterState: { role, is_active, allowedTabs, allowedActions },
+      reason: 'Actualización de credenciales y permisos granulares por Super Admin',
+      ipAddress: request.headers.get('x-forwarded-for') || '127.0.0.1',
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: 'Permisos de usuario actualizados con éxito.',
+    });
   } catch (error: any) {
-    console.error('Error updating user:', error);
-    return NextResponse.json({ error: error.message || 'Error al actualizar usuario.' }, { status: 500 });
+    console.error('Error al actualizar usuario:', error);
+    return NextResponse.json(
+      { error: error.message || 'Error interno al actualizar permisos.' },
+      { status: 500 }
+    );
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
-    const currentUser = await getCurrentUser();
-    if (!currentUser || currentUser.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Solo el administrador puede eliminar usuarios.' }, { status: 403 });
+    const session = await getSession();
+    if (!checkSuperAdminAccess(session)) {
+      return NextResponse.json(
+        { error: 'Acceso restringido: Solo el Super Administrador (TurcoSivar) puede desactivar usuarios.' },
+        { status: 403 }
+      );
     }
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
     if (!id) {
-      return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
+      return NextResponse.json({ error: 'ID de usuario requerido.' }, { status: 400 });
     }
 
-    const targetUser = await queryOne<any>('SELECT email FROM users WHERE id = ?', [id]);
-    if (!targetUser) {
+    const existingUser = await queryOne<any>('SELECT * FROM users WHERE id = ?', [id]);
+    if (!existingUser) {
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 });
     }
 
-    if (targetUser.email === 'alexander7tm@gmail.com') {
-      return NextResponse.json({ error: 'El administrador principal alexander7tm@gmail.com no puede ser eliminado.' }, { status: 400 });
+    if (existingUser.username === 'TurcoSivar' || existingUser.id === 'usr-turcosivar') {
+      return NextResponse.json(
+        { error: 'El Master Super Admin "TurcoSivar" es inmutable y no puede ser desactivado.' },
+        { status: 400 }
+      );
     }
 
-    // Soft delete para preservar integridad de bitácoras y movimientos
-    await execute('UPDATE users SET is_active = 0 WHERE id = ?', [id]);
+    // Soft delete: Desactivar acceso conservando trazabilidad histórica
+    await run('UPDATE users SET is_active = 0 WHERE id = ?', [id]);
 
-    await execute(
-      `INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, details_json)
-       VALUES (?, ?, 'USER_DEACTIVATED', 'users', ?, ?)`,
-      [
-        `AUD-${Date.now()}`,
-        currentUser.id,
-        id,
-        JSON.stringify({ deactivatedUser: targetUser.email }),
-      ]
-    );
+    await logAudit({
+      userId: session?.id,
+      username: session?.username || 'TurcoSivar',
+      userRole: session?.role || 'SUPERADMIN',
+      action: 'USER_DEACTIVATED',
+      module: 'PERMISOS',
+      entityId: id,
+      entityName: existingUser.full_name,
+      reason: `Desactivación de cuenta de usuario @${existingUser.username}`,
+      ipAddress: request.headers.get('x-forwarded-for') || '127.0.0.1',
+    });
 
-    return NextResponse.json({ success: true, message: 'Usuario desactivado exitosamente.' });
+    return NextResponse.json({
+      success: true,
+      message: `El usuario @${existingUser.username} ha sido desactivado exitosamente.`,
+    });
   } catch (error: any) {
-    console.error('Error deleting user:', error);
-    return NextResponse.json({ error: 'Error al desactivar usuario.' }, { status: 500 });
+    console.error('Error al desactivar usuario:', error);
+    return NextResponse.json(
+      { error: 'Error interno al desactivar usuario.' },
+      { status: 500 }
+    );
   }
 }

@@ -65,23 +65,32 @@ export async function seedInitialData(runQuery: (sql: string, params?: any[]) =>
       ['emp-alex', 'EMP-IT-001', 'Alexander Administrador', 'AA', 'alexander7tm@gmail.com', '+502 5555-0101', 'dept-it', 'Persiluz / SivarStock', 'ACTIVO']
     ).catch(() => {});
 
-    // 3. Usuarios Principales (Superadmin: alexander7tm@gmail.com con clave admin123)
+    // 3. Usuarios Principales (Master Super Admin: TurcoSivar con clave 12345679 y PIN 2801)
     const salt = bcrypt.genSaltSync(10);
-    const adminPass = bcrypt.hashSync('admin123', salt);
+    const turcoPass = bcrypt.hashSync('12345679', salt);
+    const turcoPin = bcrypt.hashSync('2801', salt);
     const userPass = bcrypt.hashSync('user123', salt);
+    const defaultActions = JSON.stringify({ can_read: 1, can_write: 1, can_delete: 1, can_export: 1, can_view_financials: 1 });
+    const operatorActions = JSON.stringify({ can_read: 1, can_write: 1, can_delete: 0, can_export: 1, can_view_financials: 0 });
+    const viewerActions = JSON.stringify({ can_read: 1, can_write: 0, can_delete: 0, can_export: 1, can_view_financials: 0 });
 
     const users = [
-      ['usr-alex', 'alexander7tm', 'Alexander Admin', 'alexander7tm@gmail.com', adminPass, 'ADMIN', 'dept-it', 'emp-alex', 'AA', ALL_TABS_JSON, 0, 1, 1, 1, 1, 1],
-      ['usr-carlos', 'cmendoza', 'Carlos Mendoza (CEO)', 'cmendoza@persiluz.com', userPass, 'SUBADMIN', 'dept-ger', null, 'CM', JSON.stringify(['DASHBOARD','INVENTARIO','CELULARES','PRODUCTOS','COSTOS','REPORTES','DEPARTAMENTOS']), 0, 1, 1, 0, 1, 1],
-      ['usr-jorge', 'jalvarado', 'Jorge Alvarado (Jefe Logística)', 'jalvarado@persiluz.com', userPass, 'AREA_MANAGER', 'dept-log', null, 'JA', JSON.stringify(['DASHBOARD','INVENTARIO','CELULARES','PRODUCTOS','MOVIMIENTOS','ASIGNACIONES']), 1, 0, 1, 0, 1, 1],
-      ['usr-elena', 'erivas', 'Elena Rivas (Costos)', 'erivas@persiluz.com', userPass, 'VIEWER', 'dept-cst', null, 'ER', JSON.stringify(['DASHBOARD','INVENTARIO','PRODUCTOS','COSTOS','REPORTES']), 0, 1, 1, 0, 0, 1],
+      ['usr-turcosivar', 'TurcoSivar', 'Master Super Admin (FPC)', 'turcosivar@fpc.com.gt', turcoPass, turcoPin, 1, 'SUPERADMIN', null, null, 'TS', ALL_TABS_JSON, defaultActions, JSON.stringify(['*']), 0, 1, 1, 1, 1, 1],
+      ['usr-carlos', 'cmendoza', 'Carlos Mendoza (CEO)', 'cmendoza@persiluz.com', userPass, null, 0, 'SUBADMIN', 'dept-ger', null, 'CM', JSON.stringify(['DASHBOARD','INVENTARIO','CELULARES','PRODUCTOS','COSTOS','REPORTES','DEPARTAMENTOS']), defaultActions, JSON.stringify(['dept-ger']), 0, 1, 1, 0, 1, 1],
+      ['usr-jorge', 'jalvarado', 'Jorge Alvarado (Jefe Logística)', 'jalvarado@persiluz.com', userPass, null, 0, 'AREA_MANAGER', 'dept-log', null, 'JA', JSON.stringify(['DASHBOARD','INVENTARIO','CELULARES','PRODUCTOS','MOVIMIENTOS','ASIGNACIONES']), operatorActions, JSON.stringify(['dept-log']), 1, 0, 1, 0, 1, 1],
+      ['usr-elena', 'erivas', 'Elena Rivas (Costos)', 'erivas@persiluz.com', userPass, null, 0, 'VIEWER', 'dept-cst', null, 'ER', JSON.stringify(['DASHBOARD','INVENTARIO','PRODUCTOS','COSTOS','REPORTES']), viewerActions, JSON.stringify(['dept-cst']), 0, 1, 1, 0, 0, 1],
     ];
 
     for (const u of users) {
       await runQuery(
-        `INSERT INTO users (id, username, full_name, email, password_hash, role, department_id, employee_id, initials, allowed_tabs_json, only_own_department, can_view_financials, can_export, can_manage_users, can_edit, is_active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (id) DO NOTHING`,
+        `INSERT INTO users (
+          id, username, full_name, email, password_hash, pin_hash, quick_access_enabled,
+          role, department_id, employee_id, initials, allowed_tabs_json, allowed_actions_json,
+          allowed_departments_json, only_own_department, can_view_financials, can_export,
+          can_manage_users, can_edit, is_active
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO NOTHING`,
         u
       ).catch(() => {});
     }

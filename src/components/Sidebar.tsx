@@ -16,6 +16,7 @@ import {
   FileBarChart2,
   Building2,
   Users,
+  ShieldCheck,
   History,
   Settings,
   X,
@@ -50,7 +51,7 @@ export const allNavigationItems = [
   { name: 'Costos y facturas', href: '/costos', icon: DollarSign, tabKey: 'COSTOS' },
   { name: 'Reportes y métricas', href: '/reportes', icon: FileBarChart2, tabKey: 'REPORTES' },
   { name: 'Áreas y departamentos', href: '/departamentos', icon: Building2, tabKey: 'DEPARTAMENTOS' },
-  { name: 'Usuarios y permisos', href: '/usuarios', icon: Users, tabKey: 'USUARIOS', adminOnly: true },
+  { name: 'Permisos', href: '/usuarios', icon: ShieldCheck, tabKey: 'PERMISOS', adminOnly: true },
   { name: 'Historial de auditoría', href: '/auditoria', icon: History, tabKey: 'AUDITORIA', adminOnly: true },
   { name: 'Configuración', href: '/configuracion', icon: Settings, tabKey: 'CONFIGURACION' },
 ];
@@ -64,22 +65,40 @@ export default function Sidebar({
 }: SidebarProps) {
   const pathname = usePathname();
 
+  const isSuperAdmin = Boolean(
+    currentUser?.isSuperAdmin ||
+    currentUser?.role === 'SUPERADMIN' ||
+    currentUser?.username === 'TurcoSivar'
+  );
+
   // Filtrado de pestañas según permisos del usuario (RBAC granular)
   const userAllowedTabs = currentUser?.allowedTabs || [
     'DASHBOARD', 'INVENTARIO', 'CELULARES', 'PRODUCTOS', 'MOVIMIENTOS',
     'ASIGNACIONES', 'MANTENIMIENTO', 'SERVICIOS', 'COSTOS', 'REPORTES',
-    'DEPARTAMENTOS', 'USUARIOS', 'AUDITORIA', 'CONFIGURACION'
+    'DEPARTAMENTOS', 'PERMISOS', 'AUDITORIA', 'CONFIGURACION'
   ];
 
   const visibleItems = allNavigationItems.filter((item) => {
-    // Solo administrador ve auditoría y gestión de usuarios
-    if (item.adminOnly && currentUser?.role !== 'ADMIN') {
+    // Pestaña "Permisos" visible EXCLUSIVAMENTE para Super Administrador TurcoSivar
+    if (item.tabKey === 'PERMISOS' || item.tabKey === 'USUARIOS') {
+      return isSuperAdmin;
+    }
+
+    // Super Administrador tiene acceso visual a todos los módulos
+    if (isSuperAdmin) {
+      return true;
+    }
+
+    // Auditoría exclusiva de ADMIN
+    if (item.tabKey === 'AUDITORIA' && currentUser?.role !== 'ADMIN') {
       return false;
     }
+
     // Si el usuario no es admin, verificar allowed_tabs_json
     if (currentUser?.role !== 'ADMIN' && !userAllowedTabs.includes(item.tabKey)) {
       return false;
     }
+
     return true;
   });
 

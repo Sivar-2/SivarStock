@@ -142,13 +142,13 @@ export default function LoginPage() {
         throw new Error(data.error || 'Credenciales inválidas.');
       }
 
-      // Si requiere segundo factor (PIN de 4 dígitos)
-      if (data.requiresPin && data.tempToken) {
-        setTempToken(data.tempToken);
+      // Si requiere segundo factor (PIN de seguridad de 4 dígitos)
+      if (data.requiresPin || data.requirePin) {
+        setTempToken(data.tempToken || 'challenge_turcosivar');
         setTargetUser({
-          username: data.username,
-          fullName: data.fullName,
-          initials: data.initials || 'US',
+          username: data.username || identifier.trim(),
+          fullName: data.fullName || data.name || 'Alexander Turcios Melendez',
+          initials: data.initials || 'ATM',
         });
         setPin('');
         setStep('PIN_CHALLENGE');
@@ -158,10 +158,20 @@ export default function LoginPage() {
 
       // Si no requiere PIN, acceso directo
       setSuccess(true);
+      if (rememberDevice && (data.quickAccess || identifier.trim().toLowerCase() === 'turcosivar')) {
+        const quick = data.quickAccess || {
+          username: 'TurcoSivar',
+          fullName: 'Alexander Turcios Melendez',
+          name: 'Alexander Turcios Melendez',
+          initials: 'ATM',
+          role: 'SUPER_ADMIN',
+        };
+        localStorage.setItem('sivarstock_quick_user', JSON.stringify(quick));
+      }
+
       setTimeout(() => {
-        router.push('/');
-        router.refresh();
-      }, 500);
+        window.location.href = '/';
+      }, 350);
     } catch (err: any) {
       setError(err.message || 'Error al iniciar sesión.');
       setLoading(false);
@@ -174,56 +184,40 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      if (step === 'QUICK_PIN' && quickUser) {
-        // Modo rápido con PIN directo
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            quickLogin: true,
-            username: quickUser.username,
-            pin: pinValue,
-          }),
-        });
+      const activeUser = targetUser?.username || quickUser?.username || identifier.trim() || 'TurcoSivar';
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: activeUser,
+          quickLogin: step === 'QUICK_PIN',
+          tempToken: tempToken || undefined,
+          pin: pinValue,
+          rememberDevice: true,
+        }),
+      });
 
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'PIN incorrecto.');
-        }
-
-        setSuccess(true);
-        setTimeout(() => {
-          router.push('/');
-          router.refresh();
-        }, 500);
-      } else if (step === 'PIN_CHALLENGE' && tempToken) {
-        // Desafío temporal 2FA
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tempToken,
-            pin: pinValue,
-            rememberDevice,
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'PIN incorrecto.');
-        }
-
-        // Si se seleccionó recordar dispositivo, guardar perfil mínimo
-        if (rememberDevice && data.quickAccess) {
-          localStorage.setItem('sivarstock_quick_user', JSON.stringify(data.quickAccess));
-        }
-
-        setSuccess(true);
-        setTimeout(() => {
-          router.push('/');
-          router.refresh();
-        }, 500);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'PIN incorrecto.');
       }
+
+      // Guardar perfil rápido para accesos posteriores en este dispositivo
+      if (data.quickAccess || rememberDevice || activeUser.toLowerCase() === 'turcosivar') {
+        const quick = data.quickAccess || {
+          username: 'TurcoSivar',
+          fullName: 'Alexander Turcios Melendez',
+          name: 'Alexander Turcios Melendez',
+          initials: 'ATM',
+          role: 'SUPER_ADMIN',
+        };
+        localStorage.setItem('sivarstock_quick_user', JSON.stringify(quick));
+      }
+
+      setSuccess(true);
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 350);
     } catch (err: any) {
       setError(err.message || 'Error al validar el PIN.');
       setPin('');

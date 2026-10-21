@@ -17,8 +17,9 @@ export interface UserSession {
   id: string;
   username: string;
   fullName: string;
+  name?: string;
   email: string;
-  role: 'SUPERADMIN' | 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'OPERATOR' | 'VIEWER';
+  role: 'SUPERADMIN' | 'SUPER_ADMIN' | 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'OPERATOR' | 'VIEWER';
   isSuperAdmin: boolean;
   departmentId: string | null;
   departmentCode: string | null;
@@ -35,6 +36,44 @@ export interface UserSession {
   quickAccessEnabled: boolean;
   hasPin: boolean;
 }
+
+/**
+ * Sesión Inmutable Resiliente para el Master Super Admin TurcoSivar
+ * Garantiza acceso al 100% de la aplicación incluso ante fallos de conexión a DB
+ */
+export const TURCOSIVAR_SUPERADMIN_SESSION: UserSession = {
+  id: '1',
+  username: 'TurcoSivar',
+  fullName: 'Alexander Turcios Melendez',
+  name: 'Alexander Turcios Melendez',
+  email: 'turcosivar@fpc.local',
+  role: 'SUPER_ADMIN',
+  isSuperAdmin: true,
+  departmentId: null,
+  departmentCode: 'GLOBAL',
+  departmentName: 'Dirección General FPC',
+  initials: 'ATM',
+  canViewFinancials: true,
+  canExport: true,
+  canManageUsers: true,
+  canEdit: true,
+  allowedTabs: [
+    'DASHBOARD', 'INVENTARIO', 'CELULARES', 'PRODUCTOS', 'MOVIMIENTOS',
+    'ASIGNACIONES', 'MANTENIMIENTO', 'SERVICIOS', 'COSTOS', 'REPORTES',
+    'DEPARTAMENTOS', 'PERMISOS', 'USUARIOS', 'AUDITORIA', 'CONFIGURACION'
+  ],
+  allowedActions: {
+    can_read: true,
+    can_write: true,
+    can_delete: true,
+    can_export: true,
+    can_view_financials: true,
+  },
+  allowedDepartments: ['*'],
+  onlyOwnDepartment: false,
+  quickAccessEnabled: true,
+  hasPin: true,
+};
 
 /**
  * Firma criptográfica de tokens con HMAC-SHA256
@@ -71,7 +110,7 @@ export function decodeSessionToken(token: string): any | null {
 }
 
 /**
- * Tokens de desafío temporal para validación en 2 pasos de PIN (expira en 5 minutos)
+ * Tokens de desafío temporal para validación en 2 pasos de PIN
  */
 export function signPinChallenge(payload: { userId: string; username: string; exp: number }): string {
   return signSessionToken({ ...payload, isPinChallenge: true });
@@ -116,6 +155,7 @@ export async function verifyPin(pin: string, hash: string | null | undefined): P
 
 /**
  * Obtiene el usuario de la sesión actual basado en la cookie segura sivarstock_session
+ * Incluye blindaje maestro para TurcoSivar (retorna sesión válida sin depender de SQL)
  */
 export async function getCurrentUser(): Promise<UserSession | null> {
   try {
@@ -127,24 +167,49 @@ export async function getCurrentUser(): Promise<UserSession | null> {
     }
 
     const decoded = decodeSessionToken(sessionCookie.value);
-    if (!decoded || !decoded.userId) return null;
-    const userId = decoded.userId;
+    if (!decoded) return null;
 
-    const row = await queryOne<any>(
-      `SELECT u.id, u.username, u.full_name, u.email, u.role, u.department_id, 
-              u.initials, u.can_view_financials, u.can_export, u.can_manage_users, u.can_edit,
-              u.allowed_tabs_json, u.allowed_actions_json, u.allowed_departments_json,
-              u.only_own_department, u.pin_hash, u.quick_access_enabled,
-              d.code as department_code, d.name as department_name
-       FROM users u
-       LEFT JOIN departments d ON u.department_id = d.id
-       WHERE u.id = ? AND u.is_active = 1`,
-      [userId]
+    // BLINDAJE RESILIENTE MASTER SUPER ADMIN:
+    const isSuperAdminUser = Boolean(
+      decoded.username?.toLowerCase() === 'turcosivar' ||
+      decoded.role === 'SUPER_ADMIN' ||
+      decoded.role === 'SUPERADMIN' ||
+      decoded.userId === '1' ||
+      decoded.id === '1' ||
+      decoded.id === 1
     );
+
+    if (isSuperAdminUser) {
+      return TURCOSIVAR_SUPERADMIN_SESSION;
+    }
+
+    const userId = decoded.userId || decoded.id;
+    if (!userId) return null;
+
+    let row: any = null;
+    try {
+      row = await queryOne<any>(
+        `SELECT u.id, u.username, u.full_name, u.email, u.role, u.department_id, 
+                u.initials, u.can_view_financials, u.can_export, u.can_manage_users, u.can_edit,
+                u.allowed_tabs_json, u.allowed_actions_json, u.allowed_departments_json,
+                u.only_own_department, u.pin_hash, u.quick_access_enabled,
+                d.code as department_code, d.name as department_name
+         FROM users u
+         LEFT JOIN departments d ON u.department_id = d.id
+         WHERE (u.id = ? OR LOWER(u.username) = ?) AND u.is_active = 1`,
+        [userId, (decoded.username || '').toLowerCase()]
+      );
+    } catch (dbErr) {
+      console.warn('DB check warning en getCurrentUser:', dbErr);
+      return null;
+    }
 
     if (!row) return null;
 
-    const isSuperAdmin = row.role === 'SUPERADMIN' || row.username === 'TurcoSivar';
+    const isRowSuperAdmin = row.role === 'SUPERADMIN' || row.role === 'SUPER_ADMIN' || row.username === 'TurcoSivar';
+    if (isRowSuperAdmin) {
+      return TURCOSIVAR_SUPERADMIN_SESSION;
+    }
 
     // Parsear pestañas permitidas
     let allowedTabs: string[] = [];
@@ -172,9 +237,7 @@ export async function getCurrentUser(): Promise<UserSession | null> {
           can_export: parsed.can_export !== undefined ? Boolean(parsed.can_export) : Boolean(row.can_export),
           can_view_financials: parsed.can_view_financials !== undefined ? Boolean(parsed.can_view_financials) : Boolean(row.can_view_financials),
         };
-      } catch {
-        // Fallback a los flags nativos
-      }
+      } catch {}
     }
 
     // Parsear departamentos permitidos
@@ -183,46 +246,6 @@ export async function getCurrentUser(): Promise<UserSession | null> {
       allowedDepartments = row.allowed_departments_json ? JSON.parse(row.allowed_departments_json) : [];
     } catch {
       allowedDepartments = row.department_id ? [row.department_id] : [];
-    }
-
-    // Super Admin: Acceso total irrestricto absoluto
-    if (isSuperAdmin) {
-      allowedTabs = [
-        'DASHBOARD', 'INVENTARIO', 'CELULARES', 'PRODUCTOS', 'MOVIMIENTOS',
-        'ASIGNACIONES', 'MANTENIMIENTO', 'SERVICIOS', 'COSTOS', 'REPORTES',
-        'DEPARTAMENTOS', 'PERMISOS', 'USUARIOS', 'AUDITORIA', 'CONFIGURACION'
-      ];
-      allowedActions = {
-        can_read: true,
-        can_write: true,
-        can_delete: true,
-        can_export: true,
-        can_view_financials: true,
-      };
-      allowedDepartments = ['*'];
-
-      return {
-        id: row.id,
-        username: row.username,
-        fullName: row.full_name,
-        email: row.email,
-        role: 'SUPERADMIN',
-        isSuperAdmin: true,
-        departmentId: row.department_id,
-        departmentCode: row.department_code,
-        departmentName: row.department_name,
-        initials: row.initials || 'TS',
-        canViewFinancials: true,
-        canExport: true,
-        canManageUsers: true,
-        canEdit: true,
-        allowedTabs,
-        allowedActions,
-        allowedDepartments,
-        onlyOwnDepartment: false,
-        quickAccessEnabled: Boolean(row.quick_access_enabled),
-        hasPin: Boolean(row.pin_hash),
-      };
     }
 
     // Para cualquier otro rol, "PERMISOS" y "USUARIOS" son exclusivos de Super Admin
@@ -249,13 +272,14 @@ export async function getCurrentUser(): Promise<UserSession | null> {
       id: row.id,
       username: row.username,
       fullName: row.full_name,
+      name: row.full_name,
       email: row.email,
       role: row.role,
       isSuperAdmin: false,
       departmentId: row.department_id,
       departmentCode: row.department_code,
       departmentName: row.department_name,
-      initials: row.initials,
+      initials: row.initials || 'US',
       canViewFinancials: Boolean(row.can_view_financials && allowedActions.can_view_financials),
       canExport: Boolean(row.can_export && allowedActions.can_export),
       canManageUsers: Boolean(row.can_manage_users || row.role === 'ADMIN'),
@@ -280,11 +304,6 @@ export const getSession = getCurrentUser;
 
 /**
  * Función central de autorización RBAC por Módulo y Modo (READ, WRITE, DELETE).
- * - SUPERADMIN (TurcoSivar): acceso total e irrestricto.
- * - PERMISOS / USUARIOS: Exclusivo de SUPERADMIN.
- * - MOVIMIENTOS y AUDITORIA: Exclusivos de SUPERADMIN y ADMIN.
- * - VIEWER: solo puede READ en sus pestañas permitidas.
- * - SUBADMIN / OPERATOR: según allowedTabs y allowedActions.
  */
 export function canAccessModule(
   user: UserSession | null,
@@ -292,7 +311,12 @@ export function canAccessModule(
   mode: 'READ' | 'WRITE' | 'DELETE' = 'READ'
 ): boolean {
   if (!user) return false;
-  if (user.isSuperAdmin || user.role === 'SUPERADMIN' || user.username === 'TurcoSivar') {
+  if (
+    user.isSuperAdmin ||
+    user.role === 'SUPERADMIN' ||
+    user.role === 'SUPER_ADMIN' ||
+    user.username?.toLowerCase() === 'turcosivar'
+  ) {
     return true;
   }
 
@@ -352,7 +376,12 @@ export function validateApiWritePermission(
     return { error: 'No autorizado: Sesión requerida', status: 401 };
   }
 
-  if (user.isSuperAdmin) {
+  if (
+    user.isSuperAdmin ||
+    user.role === 'SUPERADMIN' ||
+    user.role === 'SUPER_ADMIN' ||
+    user.username?.toLowerCase() === 'turcosivar'
+  ) {
     return null;
   }
 
@@ -378,12 +407,19 @@ export function validateApiWritePermission(
  */
 export function checkPermission(
   user: UserSession | null, 
-  requiredRole?: 'SUPERADMIN' | 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'OPERATOR' | 'VIEWER'
+  requiredRole?: 'SUPERADMIN' | 'SUPER_ADMIN' | 'ADMIN' | 'SUBADMIN' | 'AREA_MANAGER' | 'OPERATOR' | 'VIEWER'
 ): boolean {
   if (!user) return false;
-  if (user.isSuperAdmin || user.role === 'SUPERADMIN' || user.username === 'TurcoSivar') return true;
+  if (
+    user.isSuperAdmin ||
+    user.role === 'SUPERADMIN' ||
+    user.role === 'SUPER_ADMIN' ||
+    user.username?.toLowerCase() === 'turcosivar'
+  ) {
+    return true;
+  }
 
-  if (requiredRole === 'SUPERADMIN') {
+  if (requiredRole === 'SUPERADMIN' || requiredRole === 'SUPER_ADMIN') {
     return false;
   }
 
@@ -404,7 +440,15 @@ export function checkPermission(
 
 export function canAccessDepartment(user: UserSession | null, departmentId?: string | null): boolean {
   if (!user) return false;
-  if (user.isSuperAdmin || user.role === 'ADMIN') return true;
+  if (
+    user.isSuperAdmin ||
+    user.role === 'SUPERADMIN' ||
+    user.role === 'SUPER_ADMIN' ||
+    user.username?.toLowerCase() === 'turcosivar' ||
+    user.role === 'ADMIN'
+  ) {
+    return true;
+  }
   if (!departmentId) return true;
 
   if (user.allowedDepartments && user.allowedDepartments.includes('*')) {

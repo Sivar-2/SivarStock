@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  Settings,
   Database,
   Download,
   Moon,
@@ -15,24 +14,46 @@ import {
   ArrowRightLeft,
   Smartphone,
   Layers,
-  LayoutGrid,
-  Sparkles,
   RefreshCw,
-  Eye,
-  Sliders,
   AlertTriangle,
-  Trash2
+  Trash2,
+  Server,
+  CloudUpload,
+  CloudDownload,
+  Wifi,
+  CheckCircle2,
+  Copy,
+  PenTool,
+  RotateCcw,
+  Save,
+  UserCheck
 } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ConfiguracionPage() {
-  const [activeTab, setActiveTab] = useState<'apariencia' | 'respaldos' | 'qr_generator' | 'scanner_validator' | 'menu_nombres' | 'dock_shortcuts'>('apariencia');
+  const [activeTab, setActiveTab] = useState<
+    'firma_actas' | 'servidor_sync' | 'apariencia' | 'respaldos' | 'qr_generator' | 'scanner_validator' | 'menu_nombres' | 'dock_shortcuts'
+  >('firma_actas');
+
+  // Configuración de Firma y Emisor de Actas Digitales (Por defecto: Alexander Turcios Melendez)
+  const [issuerName, setIssuerName] = useState('Alexander Turcios Melendez');
+  const [issuerRole, setIssuerRole] = useState('Jefe de IT / Administración de Inventario');
+  const [issuerSignatureData, setIssuerSignatureData] = useState<string>('');
+  const [savingIssuer, setSavingIssuer] = useState(false);
+  const [issuerSavedMsg, setIssuerSavedMsg] = useState<string | null>(null);
+  const sigCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isDrawingIssuerSig, setIsDrawingIssuerSig] = useState(false);
+
+  // Servidor Local y Sincronización Nube
+  const [syncInfo, setSyncInfo] = useState<any>(null);
+  const [cloudUrlInput, setCloudUrlInput] = useState('');
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncStatusMsg, setSyncStatusMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   // Purga de Base de Datos
   const [showPurgeModal, setShowPurgeModal] = useState(false);
   const [purgeConfirmText, setPurgeConfirmText] = useState('');
   const [purging, setPurging] = useState(false);
-  const [purgeResult, setPurgeResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Modo Nocturno
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -67,7 +88,7 @@ export default function ConfiguracionPage() {
     MOVIMIENTOS: 'Entradas y movimientos',
     ASIGNACIONES: 'Asignaciones a personal',
     MANTENIMIENTO: 'Averías y mantenimiento',
-    SERVICIOS: 'Licencias y servicios',
+    SERVICIOS: 'Licencias y contratos',
     COSTOS: 'Costos y facturas',
     REPORTES: 'Reportes y métricas',
     DEPARTAMENTOS: 'Áreas y departamentos',
@@ -82,19 +103,39 @@ export default function ConfiguracionPage() {
   const [dockShortcuts, setDockShortcuts] = useState({
     left1: { name: 'Inicio', href: '/' },
     left2: { name: 'Inventario', href: '/inventario' },
-    right1: { name: 'Costos', href: '/costos' },
+    right1: { name: 'Asignaciones', href: '/asignaciones' },
     right2: { name: 'Reportes', href: '/reportes' },
   });
 
+  const loadSyncStatus = () => {
+    fetch('/api/sync')
+      .then((r) => r.json())
+      .then((d) => {
+        setSyncInfo(d);
+      })
+      .catch(console.error);
+  };
+
+  const loadIssuerConfig = () => {
+    fetch('/api/actas')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.issuerConfig) {
+          setIssuerName(d.issuerConfig.issuerName || 'Alexander Turcios Melendez');
+          setIssuerRole(d.issuerConfig.issuerRole || 'Jefe de IT / Administración de Inventario');
+          setIssuerSignatureData(d.issuerConfig.issuerSignatureData || '');
+        }
+      })
+      .catch(console.error);
+  };
+
   useEffect(() => {
-    // Cargar Tema
     const savedTheme = localStorage.getItem('sivarstock_theme');
     if (savedTheme === 'dark') {
       setIsDarkMode(true);
       document.documentElement.classList.add('dark');
     }
 
-    // Cargar Nombres de Pestañas
     const savedTabs = localStorage.getItem('sivarstock_tab_names');
     if (savedTabs) {
       try {
@@ -104,7 +145,6 @@ export default function ConfiguracionPage() {
       }
     }
 
-    // Cargar Atajos del Dock
     const savedDock = localStorage.getItem('sivarstock_dock_shortcuts');
     if (savedDock) {
       try {
@@ -114,7 +154,9 @@ export default function ConfiguracionPage() {
       }
     }
 
-    // Cargar Catálogos
+    loadSyncStatus();
+    loadIssuerConfig();
+
     fetch('/api/catalogs')
       .then((r) => r.json())
       .then((d) => {
@@ -124,7 +166,119 @@ export default function ConfiguracionPage() {
       .catch(console.error);
   }, []);
 
-  // Alternar Modo Nocturno
+  // Funciones para dibujar firma personalizada del responsable en Ajustes
+  const getCanvasPoint = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = sigCanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    if ('touches' in e) {
+      const touch = e.touches[0] || e.changedTouches[0];
+      return {
+        x: ((touch.clientX - rect.left) * canvas.width) / rect.width,
+        y: ((touch.clientY - rect.top) * canvas.height) / rect.height,
+      };
+    }
+    return {
+      x: ((e.clientX - rect.left) * canvas.width) / rect.width,
+      y: ((e.clientY - rect.top) * canvas.height) / rect.height,
+    };
+  };
+
+  const startIssuerDraw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const canvas = sigCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { x, y } = getCanvasPoint(e);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#0f172a';
+    setIsDrawingIssuerSig(true);
+  };
+
+  const moveIssuerDraw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawingIssuerSig) return;
+    e.preventDefault();
+    const canvas = sigCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { x, y } = getCanvasPoint(e);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+
+  const endIssuerDraw = () => {
+    if (!isDrawingIssuerSig) return;
+    setIsDrawingIssuerSig(false);
+    const canvas = sigCanvasRef.current;
+    if (canvas) {
+      setIssuerSignatureData(canvas.toDataURL('image/png'));
+    }
+  };
+
+  const clearIssuerCanvas = () => {
+    const canvas = sigCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    setIssuerSignatureData('');
+  };
+
+  const handleSaveIssuerSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingIssuer(true);
+    setIssuerSavedMsg(null);
+    try {
+      const res = await fetch('/api/actas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'SAVE_ISSUER_SETTINGS',
+          issuerName: issuerName.trim() || 'Alexander Turcios Melendez',
+          issuerRole: issuerRole.trim() || 'Jefe de IT / Administración de Inventario',
+          issuerSignatureData: issuerSignatureData || '',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al guardar firma');
+      setIssuerSavedMsg('¡Configuración de Firma y Responsable guardada exitosamente! Todas las actas nuevas usarán estos datos.');
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setSavingIssuer(false);
+    }
+  };
+
+  // Ejecutar Acción de Sincronización Nube / Servidor Local
+  const handleSyncAction = async (action: 'SAVE_URL' | 'TEST_CONNECTION' | 'PUSH_TO_CLOUD' | 'PULL_FROM_CLOUD') => {
+    setSyncLoading(true);
+    setSyncStatusMsg(null);
+    try {
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          remotePostgresUrl: cloudUrlInput.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error en la operación de sincronización');
+      setSyncStatusMsg({ type: 'success', text: data.message || 'Operación completada exitosamente.' });
+      loadSyncStatus();
+    } catch (err: any) {
+      setSyncStatusMsg({ type: 'error', text: err.message });
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
   const toggleDarkMode = () => {
     const nextState = !isDarkMode;
     setIsDarkMode(nextState);
@@ -137,19 +291,18 @@ export default function ConfiguracionPage() {
     }
   };
 
-  // Guardar Nombres de Pestañas Personalizados
   const handleSaveTabNames = () => {
     localStorage.setItem('sivarstock_tab_names', JSON.stringify(tabNames));
-    alert('Nombres de pestañas actualizados correctamente en el menú.');
+    window.dispatchEvent(new Event('storage'));
+    alert('Nombres de pestañas actualizados correctamente en el menú lateral.');
   };
 
-  // Guardar Atajos del Dock
   const handleSaveDockShortcuts = () => {
     localStorage.setItem('sivarstock_dock_shortcuts', JSON.stringify(dockShortcuts));
+    window.dispatchEvent(new Event('storage'));
     alert('Atajos de la barra flotante guardados correctamente.');
   };
 
-  // Generar Lote de QR
   const handleFetchBatchQr = () => {
     setLoadingQr(true);
     const params = new URLSearchParams();
@@ -166,7 +319,6 @@ export default function ConfiguracionPage() {
       .finally(() => setLoadingQr(false));
   };
 
-  // Escanear / Validar Código
   const handleScanLookup = async (codeToSearch?: string) => {
     const code = (codeToSearch || searchCode).trim();
     if (!code) return;
@@ -175,14 +327,20 @@ export default function ConfiguracionPage() {
     setScannedAsset(null);
 
     try {
-      const res = await fetch(`/api/inventory?search=${encodeURIComponent(code)}`);
+      const res = await fetch(`/api/inventory/items?search=${encodeURIComponent(code)}`);
       const data = await res.json();
       if (data.items && data.items.length > 0) {
-        // Encontrado
-        const item = data.items.find((i: any) => i.permanent_code?.toUpperCase() === code.toUpperCase()) || data.items[0];
+        const item =
+          data.items.find(
+            (i: any) =>
+              i.permanent_code?.toUpperCase() === code.toUpperCase() ||
+              i.serial_number?.toUpperCase() === code.toUpperCase() ||
+              i.imei?.toUpperCase() === code.toUpperCase() ||
+              i.mac_address?.toUpperCase() === code.toUpperCase()
+          ) || data.items[0];
         setScannedAsset(item);
       } else {
-        setScanMessage(`El código ${code} no fue encontrado en la base de datos.`);
+        setScanMessage(`El código, serie o IMEI "${code}" no fue encontrado en la base de datos.`);
       }
     } catch (err: any) {
       setScanMessage(`Error al buscar activo: ${err.message}`);
@@ -191,14 +349,12 @@ export default function ConfiguracionPage() {
     }
   };
 
-  // Abrir Modal de Sustitución
   const openReplaceModal = () => {
     if (!scannedAsset) return;
-    fetch('/api/inventory?status=DISPONIBLE')
+    fetch('/api/inventory/items?status=DISPONIBLE')
       .then((r) => r.json())
       .then((d) => {
         if (d.items) {
-          // Filtrar equipos de la misma categoría o compatibles
           setAvailableReplacements(d.items.filter((i: any) => i.id !== scannedAsset.id));
         }
         setShowReplaceModal(true);
@@ -206,7 +362,6 @@ export default function ConfiguracionPage() {
       .catch(console.error);
   };
 
-  // Ejecutar Cambio / Sustitución de Producto en SQL
   const handleExecuteReplacement = async () => {
     if (!selectedReplacementId || !replaceReason.trim()) {
       alert('Debes seleccionar el producto sustituto de bodega y escribir el motivo.');
@@ -214,45 +369,31 @@ export default function ConfiguracionPage() {
     }
 
     try {
-      // 1. Dar de baja o marcar averiado el producto original
-      // 2. Asignar el nuevo producto al empleado del producto anterior
-      const res = await fetch('/api/maintenance', {
+      const res = await fetch('/api/inventory/lifecycle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          item_id: scannedAsset.id,
-          reported_date: new Date().toISOString().slice(0, 10),
-          fault_description: `Sustitución de equipo solicitada: ${replaceReason}`,
-          severity: 'MEDIA',
+          action: 'REPLACE_BROKEN_ITEM',
+          brokenItemId: scannedAsset.id,
+          replacementItemId: selectedReplacementId,
+          reason: replaceReason,
+          severity: 'MODERADA',
         }),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || 'Error al sustituir equipo');
 
-      // Asignar el nuevo equipo al empleado
-      if (scannedAsset.assigned_employee_id) {
-        await fetch('/api/inventory', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: selectedReplacementId,
-            action: 'ASSIGN',
-            employee_id: scannedAsset.assigned_employee_id,
-            reason: `Reemplazo de equipo ${scannedAsset.permanent_code}: ${replaceReason}`,
-          }),
-        });
-      }
-
-      alert('¡Sustitución completada! El nuevo equipo ha sido asignado y registrado en el historial.');
+      alert('¡Sustitución completada! El equipo anterior pasó a revisión/avería y el nuevo equipo de bodega fue asignado al custodio.');
       setShowReplaceModal(false);
+      setReplaceReason('');
+      setSelectedReplacementId('');
       handleScanLookup(scannedAsset.permanent_code);
     } catch (err: any) {
       alert(`Error al sustituir equipo: ${err.message}`);
     }
   };
 
-  // Purgar todos los datos de prueba e iniciar inventario de cero
   const handlePurgeAllData = async () => {
     if (purgeConfirmText.trim() !== 'LIMPIAR') {
       alert('Debes escribir la palabra exacta LIMPIAR para confirmar.');
@@ -268,8 +409,7 @@ export default function ConfiguracionPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error al purgar los datos');
-      
-      setPurgeResult({ success: true, message: data.message });
+
       setShowPurgeModal(false);
       setPurgeConfirmText('');
       alert('¡Base de datos de prueba purgada exitosamente! El sistema ha iniciado de cero.');
@@ -288,14 +428,14 @@ export default function ConfiguracionPage() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">
-              Configuración del Sistema
+              Ajustes y Configuración General
             </h1>
             <span className="rounded-full bg-military-800 px-2.5 py-0.5 text-[11px] font-bold text-white">
               SivarStock Enterprise
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Copias de seguridad, generador e impresión de códigos QR, modo nocturno, escáner validador y personalización visual.
+            Firma electrónica para Actas de Entrega, Servidor Local (Windows Server / LAN), respaldos, QR y personalización.
           </p>
         </div>
       </div>
@@ -303,12 +443,14 @@ export default function ConfiguracionPage() {
       {/* Navegación por Pestañas */}
       <div className="flex overflow-x-auto border-b border-slate-200 bg-white px-2 pt-2 rounded-t-xl">
         {[
-          { id: 'apariencia', label: 'Modo Nocturno y Vista', icon: Moon },
+          { id: 'firma_actas', label: 'Firma y Responsable de Entregas', icon: PenTool },
+          { id: 'servidor_sync', label: 'Servidor Local (LAN) y Nube', icon: Server },
           { id: 'respaldos', label: 'Copias de Seguridad (BD)', icon: Database },
           { id: 'qr_generator', label: 'Generador de Códigos QR/Barra', icon: QrCode },
           { id: 'scanner_validator', label: 'Escáner Validador y Cambio', icon: Search },
+          { id: 'apariencia', label: 'Modo Nocturno y Vista', icon: Moon },
           { id: 'menu_nombres', label: 'Nombres de Menú Lateral', icon: Layers },
-          { id: 'dock_shortcuts', label: 'Atajos Burbuja iPhone', icon: Smartphone },
+          { id: 'dock_shortcuts', label: 'Atajos Burbuja Celular', icon: Smartphone },
         ].map((tab) => {
           const Icon = tab.icon;
           return (
@@ -327,6 +469,360 @@ export default function ConfiguracionPage() {
           );
         })}
       </div>
+
+      {/* 0A. FIRMA Y RESPONSABLE DE ENTREGAS DIGITALES (Por defecto: Alexander Turcios Melendez) */}
+      {activeTab === 'firma_actas' && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+          <div className="border-b border-slate-100 pb-4">
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <PenTool className="h-5 w-5 text-emerald-700" />
+              <span>Firma Automática y Responsable de Entrega de Equipos</span>
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Por defecto, todas las Actas Digitales de Entrega y Cambio enviadas por WhatsApp salen firmadas automáticamente a nombre de <strong>Alexander Turcios Melendez</strong>. Si en el futuro ingresa personal nuevo, aquí puedes cambiar el nombre, cargo o dibujar una nueva firma.
+            </p>
+          </div>
+
+          {issuerSavedMsg && (
+            <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800 flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+              <span>{issuerSavedMsg}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveIssuerSettings} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Nombre Completo de Quien Entrega los Equipos *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={issuerName}
+                  onChange={(e) => setIssuerName(e.target.value)}
+                  placeholder="Alexander Turcios Melendez"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-900 focus:border-emerald-600 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Cargo / Puesto del Responsable de Entrega *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={issuerRole}
+                  onChange={(e) => setIssuerRole(e.target.value)}
+                  placeholder="Jefe de IT / Administración de Inventario"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 focus:border-emerald-600 focus:outline-none"
+                />
+              </div>
+
+              <div className="rounded-xl bg-emerald-50/70 border border-emerald-200 p-4 space-y-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-900">
+                  <UserCheck className="h-4 w-4 text-emerald-700" />
+                  <span>Vista Previa de Firma Automática en el Acta Digital:</span>
+                </div>
+                <div className="rounded-lg bg-white border border-slate-200 p-4 text-center">
+                  {issuerSignatureData ? (
+                    <img
+                      src={issuerSignatureData}
+                      alt="Firma personalizada"
+                      className="max-h-20 mx-auto object-contain"
+                    />
+                  ) : (
+                    <p className="font-serif italic text-2xl text-slate-800 tracking-wide py-2">
+                      {issuerName || 'Alexander Turcios Melendez'}
+                    </p>
+                  )}
+                  <div className="border-t border-slate-300 mt-2 pt-1.5">
+                    <p className="text-xs font-black text-slate-900">{issuerName || 'Alexander Turcios Melendez'}</p>
+                    <p className="text-[11px] text-slate-500">{issuerRole || 'Jefe de IT / Administración de Inventario'}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-700">
+                  Dibujar Firma Manuscrita (Opcional - Si se deja en blanco usa la firma caligráfica automática):
+                </label>
+                <button
+                  type="button"
+                  onClick={clearIssuerCanvas}
+                  className="flex items-center gap-1 text-xs font-bold text-rose-600 hover:underline"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Limpiar / Usar Automática</span>
+                </button>
+              </div>
+
+              <div className="rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-2">
+                <canvas
+                  ref={sigCanvasRef}
+                  width={500}
+                  height={170}
+                  onMouseDown={startIssuerDraw}
+                  onMouseMove={moveIssuerDraw}
+                  onMouseUp={endIssuerDraw}
+                  onMouseLeave={endIssuerDraw}
+                  onTouchStart={startIssuerDraw}
+                  onTouchMove={moveIssuerDraw}
+                  onTouchEnd={endIssuerDraw}
+                  className="w-full h-40 bg-white rounded-lg cursor-crosshair touch-none"
+                />
+              </div>
+
+              <p className="text-[11px] text-slate-500">
+                Puedes firmar aquí desde la pantalla táctil de tu <strong>Honor 400</strong> o con el mouse. Si no dibujas nada, el sistema estampará automáticamente la firma elegante de <strong>{issuerName || 'Alexander Turcios Melendez'}</strong>.
+              </p>
+
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="submit"
+                  disabled={savingIssuer}
+                  className="flex items-center gap-2 rounded-xl bg-emerald-700 px-5 py-2.5 text-xs font-bold text-white shadow-md hover:bg-emerald-800 transition disabled:opacity-50"
+                >
+                  <Save className="h-4 w-4" />
+                  <span>{savingIssuer ? 'Guardando...' : 'Guardar Responsable y Firma por Defecto'}</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 0B. Servidor Local (LAN) y Sincronización con la Nube */}
+      {activeTab === 'servidor_sync' && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Server className="h-5 w-5 text-military-800" />
+                <span>Alojamiento en Windows Server Local (`serverlocal`) y Sincronización</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Trabaja desde tu Honor 400 o PC en la base de datos local (`data/sivarstock.db`). Si haces cambios fuera del Wi-Fi de la empresa, tu celular los guarda en cola y los confirma automáticamente al detectar el Wi-Fi corporativo.
+              </p>
+            </div>
+            <button
+              onClick={loadSyncStatus}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Refrescar Red</span>
+            </button>
+          </div>
+
+          {syncStatusMsg && (
+            <div
+              className={`p-3.5 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
+                syncStatusMsg.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : syncStatusMsg.type === 'error'
+                  ? 'bg-rose-50 border-rose-200 text-rose-800'
+                  : 'bg-blue-50 border-blue-200 text-blue-800'
+              }`}
+            >
+              {syncStatusMsg.type === 'success' ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0" />
+              )}
+              <span>{syncStatusMsg.text}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Tarjeta 1: Servidor Local en la Red de la Empresa (LAN) */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-military-800 font-bold text-xs uppercase">
+                  <Wifi className="h-4 w-4 text-emerald-600" />
+                  <span>Direcciones IP del Servidor Local en el Wi-Fi de la Empresa</span>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                  Motor: {syncInfo?.engine === 'POSTGRESQL' ? 'PostgreSQL Directo' : 'SQLite Local Rápido'}
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Abre cualquiera de estas direcciones en el navegador de tu <strong>Honor 400</strong> o en cualquier PC conectada al Wi-Fi de la empresa (también usa este enlace para enviar las Actas por WhatsApp dentro de la red):
+              </p>
+
+              <div className="space-y-2">
+                {syncInfo?.lanIps && syncInfo.lanIps.length > 0 ? (
+                  syncInfo.lanIps.map((ip: string, idx: number) => {
+                    const fullUrl = `http://${ip}:${syncInfo.port || 3000}`;
+                    return (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+                      >
+                        <div>
+                          <span className="font-mono font-bold text-slate-900">{fullUrl}</span>
+                          <span className="ml-2 text-[11px] text-emerald-700 font-semibold">(Red Local LAN)</span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(fullUrl);
+                            alert(`Dirección copiada: ${fullUrl}`);
+                          }}
+                          className="flex items-center gap-1 text-[11px] font-bold text-military-700 hover:underline"
+                        >
+                          <Copy className="h-3 w-3" />
+                          <span>Copiar</span>
+                        </button>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500">
+                    Ejecutando en <span className="font-mono font-bold">http://localhost:3000</span>
+                  </div>
+                )}
+              </div>
+
+              {syncInfo?.counts && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-200 text-center">
+                  <div className="rounded-lg bg-white p-2 border border-slate-200">
+                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Empleados</span>
+                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.employees}</span>
+                  </div>
+                  <div className="rounded-lg bg-white p-2 border border-slate-200">
+                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Activos Físicos</span>
+                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.inventory_items}</span>
+                  </div>
+                  <div className="rounded-lg bg-white p-2 border border-slate-200">
+                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Líneas Móviles</span>
+                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.mobile_devices}</span>
+                  </div>
+                  <div className="rounded-lg bg-white p-2 border border-slate-200">
+                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Contratos/Lic.</span>
+                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.digital_services}</span>
+                  </div>
+                  <div className="rounded-lg bg-white p-2 border border-slate-200">
+                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Actas Digitales</span>
+                    <span className="text-sm font-black text-emerald-700">{syncInfo.counts.delivery_actas ?? 0}</span>
+                  </div>
+                  <div className="rounded-lg bg-white p-2 border border-slate-200">
+                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Movimientos</span>
+                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.movements}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-lg bg-slate-900 p-3 text-[11px] text-slate-200 font-mono">
+                <span className="text-emerald-400 font-bold block mb-1">Archivo automático incluido para tu Windows Server:</span>
+                <code>Iniciar-Servidor-Local-SivarStock.bat</code>
+              </div>
+            </div>
+
+            {/* Tarjeta 2: Sincronización con Base de Datos en la Nube (Supabase / PostgreSQL) */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 space-y-4 flex flex-col justify-between">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-blue-800 font-bold text-xs uppercase">
+                    <CloudUpload className="h-4 w-4 text-blue-600" />
+                    <span>Respaldo / Sincronización Nube (PostgreSQL / Supabase)</span>
+                  </div>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                      syncInfo?.hasRemoteConfigured
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    {syncInfo?.hasRemoteConfigured ? 'Nube Configurada' : 'Opcional'}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Además de tu base de datos local en Windows Server, puedes vincular una base PostgreSQL/Supabase en la nube para subir o descargar copias sincronizadas cuando lo desees.
+                </p>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    URL de Conexión PostgreSQL / Supabase (Cloud Database URL):
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      placeholder={
+                        syncInfo?.savedRemoteUrlMasked
+                          ? `Actual: ${syncInfo.savedRemoteUrlMasked}`
+                          : 'postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres'
+                      }
+                      value={cloudUrlInput}
+                      onChange={(e) => setCloudUrlInput(e.target.value)}
+                      className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:outline-none focus:border-blue-600"
+                    />
+                    <button
+                      type="button"
+                      disabled={syncLoading || !cloudUrlInput.trim()}
+                      onClick={() => handleSyncAction('SAVE_URL')}
+                      className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-bold text-white hover:bg-slate-900 disabled:opacity-50"
+                    >
+                      Guardar URL
+                    </button>
+                  </div>
+                </div>
+
+                {syncInfo?.lastSync && (
+                  <div className="text-[11px] text-slate-500 bg-white p-2.5 rounded-lg border border-slate-200">
+                    <strong>Última sincronización nube:</strong> {syncInfo.lastSync}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  disabled={syncLoading}
+                  onClick={() => handleSyncAction('TEST_CONNECTION')}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition disabled:opacity-50"
+                >
+                  <CheckCircle className="h-4 w-4 text-emerald-600" />
+                  <span>1. Probar Conexión con Servidor en la Nube</span>
+                </button>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={syncLoading}
+                    onClick={() => {
+                      if (confirm('¿Deseas subir y sincronizar todos los cambios de este servidor local hacia la base de datos en la nube?')) {
+                        handleSyncAction('PUSH_TO_CLOUD');
+                      }
+                    }}
+                    className="flex items-center justify-center gap-1.5 rounded-lg bg-military-800 px-3 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-military-900 transition disabled:opacity-50"
+                  >
+                    <CloudUpload className="h-4 w-4" />
+                    <span>Subir Cambios a Nube (Push)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={syncLoading}
+                    onClick={() => {
+                      if (confirm('¿Deseas descargar los registros de la nube para actualizar tu base de datos local?')) {
+                        handleSyncAction('PULL_FROM_CLOUD');
+                      }
+                    }}
+                    className="flex items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-blue-800 transition disabled:opacity-50"
+                  >
+                    <CloudDownload className="h-4 w-4" />
+                    <span>Bajar de Nube a Local (Pull)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 1. Modo Nocturno y Apariencia */}
       {activeTab === 'apariencia' && (
@@ -377,12 +873,11 @@ export default function ConfiguracionPage() {
           <div>
             <h2 className="text-base font-bold text-slate-900">Copias de Seguridad y Respaldo de Información</h2>
             <p className="text-xs text-slate-500">
-              Descarga la base de datos relacional completa para resguardo seguro contra pérdida de información.
+              Descarga la base de datos relacional completa (incluyendo Actas Digitales firmadas, empleados, DPI, líneas y contratos) para resguardo seguro.
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 max-w-3xl">
-            {/* Opción 1: SQLite Binario */}
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-military-800 font-bold text-xs uppercase mb-1">
@@ -390,7 +885,7 @@ export default function ConfiguracionPage() {
                   <span>Base de Datos Completa (.db)</span>
                 </div>
                 <p className="text-xs text-slate-600 mt-2">
-                  Archivo SQLite binario completo (`sivarstock.db`) con todas las tablas relacionales, índices y claves foráneas.
+                  Archivo SQLite binario completo (`sivarstock.db`) con todas las tablas relacionales, actas firmadas, índices y claves foráneas.
                 </p>
               </div>
               <a
@@ -403,7 +898,6 @@ export default function ConfiguracionPage() {
               </a>
             </div>
 
-            {/* Opción 2: JSON Estructurado */}
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-blue-700 font-bold text-xs uppercase mb-1">
@@ -411,7 +905,7 @@ export default function ConfiguracionPage() {
                   <span>Respaldo Estructurado (.json)</span>
                 </div>
                 <p className="text-xs text-slate-600 mt-2">
-                  Dumping JSON con activos, consumibles, celulares, empleados, movimientos kardex, facturas y auditoría.
+                  Dumping JSON con activos, consumibles, celulares, empleados, actas digitales de entrega, movimientos kardex y auditoría.
                 </p>
               </div>
               <a
@@ -435,7 +929,7 @@ export default function ConfiguracionPage() {
                     Zona de Mantenimiento de Datos: Iniciar Inventario Real de Cero
                   </h3>
                   <p className="text-xs text-rose-700 mt-1 leading-relaxed">
-                    Esta acción vacía con un solo clic todos los datos de prueba (activos individuales, productos, asignaciones, consumibles, celulares, movimientos y empleados de prueba), conservando intactos los departamentos, categorías base y el usuario administrador actual.
+                    Esta acción vacía con un solo clic todos los datos de prueba (activos individuales, productos, asignaciones, actas, consumibles, celulares, movimientos y empleados de prueba), conservando intactos los departamentos, categorías base y el usuario administrador actual.
                   </p>
                   <div className="mt-4 flex items-center gap-3">
                     <button
@@ -476,7 +970,6 @@ export default function ConfiguracionPage() {
             )}
           </div>
 
-          {/* Filtros de Selección Poka-Yoke */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Por Departamento</label>
@@ -538,7 +1031,6 @@ export default function ConfiguracionPage() {
             </div>
           </div>
 
-          {/* Cuadrícula de Etiquetas para Impresión */}
           <div className="printable-qr-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {qrItems.map((item) => (
               <div
@@ -576,7 +1068,7 @@ export default function ConfiguracionPage() {
 
           {qrItems.length === 0 && !loadingQr && (
             <div className="py-12 text-center text-xs text-slate-400">
-              Selecciona un departamento, empleado o categoría y presiona "Generar Códigos" para previsualizar las etiquetas imprimibles.
+              Selecciona un departamento, empleado o categoría y presiona &quot;Generar Códigos&quot; para previsualizar las etiquetas imprimibles.
             </div>
           )}
         </div>
@@ -590,15 +1082,14 @@ export default function ConfiguracionPage() {
               Escáner Validador y Módulo de Cambio de Producto
             </h2>
             <p className="text-xs text-slate-500">
-              Escanea o ingresa el código del producto para ver su fecha, custodio, estado, y sustituirlo en caso de avería o cambio.
+              Escanea o ingresa el código permanente, número de serie, MAC o IMEI del equipo para ver su ficha y sustituirlo en caso de avería.
             </p>
           </div>
 
-          {/* Buscador de Código */}
           <div className="flex gap-2 max-w-lg">
             <input
               type="text"
-              placeholder="Ingresa o escanea código ej. SIV-IT-000001..."
+              placeholder="Ingresa código SIV-IT-000001, Serie, MAC o IMEI..."
               value={searchCode}
               onChange={(e) => setSearchCode(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleScanLookup()}
@@ -621,7 +1112,6 @@ export default function ConfiguracionPage() {
             </div>
           )}
 
-          {/* Ficha del Producto Escaneado */}
           {scannedAsset && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 max-w-2xl space-y-4">
               <div className="flex items-center justify-between border-b border-slate-200 pb-3">
@@ -646,10 +1136,22 @@ export default function ConfiguracionPage() {
                 </Link>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
                 <div>
                   <span className="text-[11px] text-slate-500 block">Número de Serie:</span>
-                  <span className="font-semibold text-slate-800">{scannedAsset.serial_number || 'N/A'}</span>
+                  <span className="font-mono font-semibold text-slate-800">{scannedAsset.serial_number || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="text-[11px] text-slate-500 block">MAC / IMEI:</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {scannedAsset.mac_address || scannedAsset.imei || 'N/A'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[11px] text-slate-500 block">IP / Hostname:</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {scannedAsset.ip_address || scannedAsset.hostname || 'N/A'}
+                  </span>
                 </div>
                 <div>
                   <span className="text-[11px] text-slate-500 block">Fecha de Registro:</span>
@@ -663,11 +1165,12 @@ export default function ConfiguracionPage() {
                 </div>
                 <div>
                   <span className="text-[11px] text-slate-500 block">Custodio Asignado:</span>
-                  <span className="font-semibold text-slate-800">{scannedAsset.employee_name || 'Sin Asignar'}</span>
+                  <span className="font-semibold text-slate-800">
+                    {scannedAsset.employee_name || scannedAsset.assigned_user_name || 'Sin Asignar (En Bodega)'}
+                  </span>
                 </div>
               </div>
 
-              {/* Botón de Cambio / Sustitución */}
               <div className="pt-3 border-t border-slate-200 flex gap-3">
                 <button
                   onClick={openReplaceModal}
@@ -682,14 +1185,14 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* 5. Personalización de Nombres de Pestañas (Front-End) */}
+      {/* 5. Personalización de Nombres de Pestañas */}
       {activeTab === 'menu_nombres' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-slate-900">Personalizar Nombres de Pestañas del Menú</h2>
               <p className="text-xs text-slate-500">
-                Cambia el texto mostrado en el frontend conservando el orden de las categorías.
+                Cambia el texto mostrado en el menú lateral conservando el orden de las categorías.
               </p>
             </div>
             <button
@@ -718,14 +1221,14 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* 6. Atajos de la Burbuja Flotante iPhone */}
+      {/* 6. Atajos de la Burbuja Flotante */}
       {activeTab === 'dock_shortcuts' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h2 className="text-base font-bold text-slate-900">Atajos de la Burbuja Flotante (Estilo iPhone)</h2>
+              <h2 className="text-base font-bold text-slate-900">Atajos de la Burbuja Flotante para Celular</h2>
               <p className="text-xs text-slate-500">
-                Configura los atajos laterales de la burbuja (el escáner siempre ocupa la posición central).
+                Configura los atajos laterales de la burbuja inferior en tu Honor 400 (el escáner siempre ocupa la posición central).
               </p>
             </div>
             <button
@@ -901,7 +1404,7 @@ export default function ConfiguracionPage() {
               <ul className="list-disc pl-5 space-y-1 text-slate-600 font-mono text-[11px]">
                 <li>Activos físicos individuales y movimientos kardex</li>
                 <li>Catálogo de productos y stocks consumibles</li>
-                <li>Historial de celulares y asignaciones a personal</li>
+                <li>Historial de celulares, actas y asignaciones a personal</li>
                 <li>Registros de mantenimiento, servicios y costos</li>
                 <li>Empleados de prueba creados durante la demostración</li>
               </ul>

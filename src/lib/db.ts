@@ -10,6 +10,7 @@ import { SCHEMA_SQL } from './schema-sql';
 let sqlJsInstance: SqlJsStatic | null = null;
 let sqliteDbInstance: Database | null = null;
 let pgPoolInstance: Pool | null = null;
+let pgMigrated = false;
 const txStorage = new AsyncLocalStorage<PoolClient>();
 
 const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -36,8 +37,6 @@ export function getDatabaseEngine(): 'POSTGRESQL' | 'SQLITE' {
 
 /**
  * Inicializa el pool de PostgreSQL (Local o Remoto / Supabase)
- * Soporta ssl: false para servidores locales (192.168.x.x, 10.x.x.x, localhost, sslmode=disable)
- * y ssl: { rejectUnauthorized: false } para proveedores en la nube.
  */
 function getPgPool(): Pool {
   if (!pgPoolInstance && POSTGRES_URL) {
@@ -82,6 +81,89 @@ function getPgPool(): Pool {
 }
 
 /**
+ * Ejecuta migraciones automáticas seguras en PostgreSQL una sola vez por proceso
+ */
+async function ensurePgAutoMigrations(executor: Pool | PoolClient): Promise<void> {
+  if (pgMigrated) return;
+  pgMigrated = true;
+  const pgMigrations = [
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS dpi TEXT`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS job_title TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS mac_address TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS imei TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS ip_address TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS hostname TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS specifications TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS serial_number TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS mac_address TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS carrier TEXT DEFAULT 'Tigo'`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS plan_name TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS monthly_cost NUMERIC(12,2) DEFAULT 0`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS sim_iccid TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS contract_number TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS contract_start_date TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS contract_end_date TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN IF NOT EXISTS renewal_alert_days INTEGER DEFAULT 30`,
+    `ALTER TABLE digital_services ADD COLUMN IF NOT EXISTS contract_number TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN IF NOT EXISTS contract_type TEXT DEFAULT 'LICENCIA_SAAS'`,
+    `ALTER TABLE digital_services ADD COLUMN IF NOT EXISTS contact_name TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN IF NOT EXISTS contact_phone TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN IF NOT EXISTS contact_email TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN IF NOT EXISTS sla_terms TEXT`,
+    `CREATE TABLE IF NOT EXISTS inventory_counts (
+      id TEXT PRIMARY KEY,
+      count_code TEXT UNIQUE NOT NULL,
+      department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+      executed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      executed_by_name TEXT,
+      total_expected NUMERIC(12,2) DEFAULT 0,
+      total_counted NUMERIC(12,2) DEFAULT 0,
+      total_bodega NUMERIC(12,2) DEFAULT 0,
+      total_assigned_employees NUMERIC(12,2) DEFAULT 0,
+      discrepancies_count INTEGER DEFAULT 0,
+      details_json TEXT DEFAULT '[]',
+      notes TEXT,
+      status TEXT DEFAULT 'COMPLETADO',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS delivery_actas (
+      id TEXT PRIMARY KEY,
+      acta_code TEXT UNIQUE NOT NULL,
+      acta_type TEXT NOT NULL DEFAULT 'ENTREGA_INICIAL',
+      employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+      employee_code TEXT,
+      employee_name TEXT NOT NULL,
+      employee_dpi TEXT,
+      employee_email TEXT,
+      employee_phone TEXT,
+      department_name TEXT,
+      supervisor_name TEXT,
+      delivered_by_name TEXT NOT NULL DEFAULT 'Alexander Turcios Melendez',
+      delivered_by_role TEXT DEFAULT 'Jefe de IT / Administración de Inventario',
+      delivered_by_signature TEXT,
+      items_json TEXT NOT NULL DEFAULT '[]',
+      replaced_item_json TEXT,
+      delivery_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      status TEXT NOT NULL DEFAULT 'PENDIENTE_FIRMA',
+      employee_signature_data TEXT,
+      signed_at TEXT,
+      signed_ip TEXT,
+      public_token TEXT NOT NULL,
+      legal_notice TEXT NOT NULL DEFAULT 'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado en su correo electrónico. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.',
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+  ];
+  for (const sql of pgMigrations) {
+    try {
+      await executor.query(sql);
+    } catch {
+      // Ignorar si la tabla o columna ya existe
+    }
+  }
+}
+
+/**
  * Retorna el ejecutor activo (cliente en transacción o pool general)
  */
 function getPgExecutor(): Pool | PoolClient {
@@ -90,6 +172,99 @@ function getPgExecutor(): Pool | PoolClient {
     return txClient;
   }
   return getPgPool();
+}
+
+/**
+ * Ejecuta migraciones aditivas seguras en SQLite sin afectar datos existentes
+ */
+function runSqliteAutoMigrations(db: Database): void {
+  const migrations = [
+    // DPI y Cargo en empleados
+    `ALTER TABLE employees ADD COLUMN dpi TEXT`,
+    `ALTER TABLE employees ADD COLUMN job_title TEXT`,
+    // Identificadores técnicos en activos físicos (inventory_items)
+    `ALTER TABLE inventory_items ADD COLUMN mac_address TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN imei TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN ip_address TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN hostname TEXT`,
+    `ALTER TABLE inventory_items ADD COLUMN specifications TEXT`,
+    // Control de contratos, líneas, serie y MAC en dispositivos móviles (mobile_devices)
+    `ALTER TABLE mobile_devices ADD COLUMN serial_number TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN mac_address TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN carrier TEXT DEFAULT 'Tigo'`,
+    `ALTER TABLE mobile_devices ADD COLUMN plan_name TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN monthly_cost REAL DEFAULT 0`,
+    `ALTER TABLE mobile_devices ADD COLUMN sim_iccid TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN contract_number TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN contract_start_date TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN contract_end_date TEXT`,
+    `ALTER TABLE mobile_devices ADD COLUMN renewal_alert_days INTEGER DEFAULT 30`,
+    // Control de contratos con proveedores en servicios digitales (digital_services)
+    `ALTER TABLE digital_services ADD COLUMN contract_number TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN contract_type TEXT DEFAULT 'LICENCIA_SAAS'`,
+    `ALTER TABLE digital_services ADD COLUMN contact_name TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN contact_phone TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN contact_email TEXT`,
+    `ALTER TABLE digital_services ADD COLUMN sla_terms TEXT`,
+    // Tabla de Recuentos y Conciliación Física de Inventario
+    `CREATE TABLE IF NOT EXISTS inventory_counts (
+      id TEXT PRIMARY KEY,
+      count_code TEXT UNIQUE NOT NULL,
+      department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+      executed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      executed_by_name TEXT,
+      total_expected REAL DEFAULT 0,
+      total_counted REAL DEFAULT 0,
+      total_bodega REAL DEFAULT 0,
+      total_assigned_employees REAL DEFAULT 0,
+      discrepancies_count INTEGER DEFAULT 0,
+      details_json TEXT DEFAULT '[]',
+      notes TEXT,
+      status TEXT DEFAULT 'COMPLETADO',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )`,
+    // Tabla de Actas Digitales de Entrega y Firma Electrónica (WhatsApp / Celular / Impresión)
+    `CREATE TABLE IF NOT EXISTS delivery_actas (
+      id TEXT PRIMARY KEY,
+      acta_code TEXT UNIQUE NOT NULL,
+      acta_type TEXT NOT NULL DEFAULT 'ENTREGA_INICIAL',
+      employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+      employee_code TEXT,
+      employee_name TEXT NOT NULL,
+      employee_dpi TEXT,
+      employee_email TEXT,
+      employee_phone TEXT,
+      department_name TEXT,
+      supervisor_name TEXT,
+      delivered_by_name TEXT NOT NULL DEFAULT 'Alexander Turcios Melendez',
+      delivered_by_role TEXT DEFAULT 'Jefe de IT / Administración de Inventario',
+      delivered_by_signature TEXT,
+      items_json TEXT NOT NULL DEFAULT '[]',
+      replaced_item_json TEXT,
+      delivery_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      status TEXT NOT NULL DEFAULT 'PENDIENTE_FIRMA',
+      employee_signature_data TEXT,
+      signed_at TEXT,
+      signed_ip TEXT,
+      public_token TEXT NOT NULL,
+      legal_notice TEXT NOT NULL DEFAULT 'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado en su correo electrónico. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.',
+      notes TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )`,
+  ];
+
+  let modified = false;
+  for (const sql of migrations) {
+    try {
+      db.run(sql);
+      modified = true;
+    } catch {
+      // La columna o tabla ya existe; continuar silenciosamente
+    }
+  }
+  if (modified) {
+    saveDb();
+  }
 }
 
 /**
@@ -153,7 +328,6 @@ export async function initDb(): Promise<Database> {
   if (needsSeed) {
     sqliteDbInstance.run(SCHEMA_SQL);
 
-    // Sembrar administrador inicial y datos esenciales únicamente en creación nueva de SQLite
     await seedInitialData(async (sql, params = []) => {
       if (sqliteDbInstance) {
         sqliteDbInstance.run(sql, params);
@@ -162,6 +336,9 @@ export async function initDb(): Promise<Database> {
 
     saveDb();
   }
+
+  // Aplicar migraciones aditivas para garantizar que todas las columnas y tablas nuevas existan
+  runSqliteAutoMigrations(sqliteDbInstance);
 
   return sqliteDbInstance;
 }
@@ -186,26 +363,22 @@ export function saveDb(): void {
 
 /**
  * Traduce consultas con sintaxis de marcadores '?' a '$1, $2, ...' para PostgreSQL
- * y convierte funciones SQLite a estándar PostgreSQL.
  */
 export function translateQueryForPostgres(sqlQuery: string): string {
   let paramIndex = 1;
   let translated = sqlQuery.replace(/\?/g, () => `$${paramIndex++}`);
 
-  // Fechas y marcas de tiempo
   translated = translated.replace(/datetime\('now',\s*'-(\d+)\s*days'\)/gi, "(NOW() - INTERVAL '$1 days')");
   translated = translated.replace(/datetime\('now',\s*'\+(\d+)\s*days'\)/gi, "(NOW() + INTERVAL '$1 days')");
   translated = translated.replace(/datetime\('now'\)/gi, 'NOW()');
   translated = translated.replace(/date\('now'\)/gi, 'CURRENT_DATE');
 
-  // Días y Julián
   translated = translated.replace(/julianday\(([^)]+)\)\s*-\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) - CURRENT_DATE)");
   translated = translated.replace(/julianday\(([^)]+)\)\s*>=\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) >= CURRENT_DATE)");
   translated = translated.replace(/julianday\(([^)]+)\)\s*<=\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) <= CURRENT_DATE)");
   translated = translated.replace(/julianday\(([^)]+)\)\s*>\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) > CURRENT_DATE)");
   translated = translated.replace(/julianday\(([^)]+)\)\s*<\s*julianday\('now'\)/gi, "(CAST($1 AS DATE) < CURRENT_DATE)");
 
-  // INSERT OR IGNORE INTO -> INSERT INTO ... ON CONFLICT DO NOTHING
   if (/INSERT\s+OR\s+IGNORE\s+INTO/i.test(translated)) {
     translated = translated.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
     if (!/ON\s+CONFLICT/i.test(translated)) {
@@ -216,13 +389,10 @@ export function translateQueryForPostgres(sqlQuery: string): string {
   return translated;
 }
 
-/**
- * Ejecuta una consulta SELECT y retorna múltiples filas tipadas
- * En PostgreSQL, NUNCA cae a SQLite: propaga el error para evitar pérdida de datos.
- */
 export async function query<T = any>(sqlQuery: string, params: any[] = []): Promise<T[]> {
   if (isPostgresConfigured) {
     const executor = getPgExecutor();
+    await ensurePgAutoMigrations(executor);
     const pgSql = translateQueryForPostgres(sqlQuery);
     const res = await executor.query(pgSql, params);
     return res.rows as T[];
@@ -242,21 +412,15 @@ export async function query<T = any>(sqlQuery: string, params: any[] = []): Prom
   return results;
 }
 
-/**
- * Ejecuta una consulta SELECT y retorna una única fila o null
- */
 export async function queryOne<T = any>(sqlQuery: string, params: any[] = []): Promise<T | null> {
   const rows = await query<T>(sqlQuery, params);
   return rows.length > 0 ? rows[0] : null;
 }
 
-/**
- * Ejecuta una sentencia INSERT / UPDATE / DELETE y retorna filas modificadas
- * En PostgreSQL, NUNCA cae a SQLite: propaga el error para garantizar consistencia.
- */
 export async function run(sqlQuery: string, params: any[] = []): Promise<{ changes: number }> {
   if (isPostgresConfigured) {
     const executor = getPgExecutor();
+    await ensurePgAutoMigrations(executor);
     const pgSql = translateQueryForPostgres(sqlQuery);
     const res = await executor.query(pgSql, params);
     return { changes: res.rowCount || 0 };
@@ -269,17 +433,12 @@ export async function run(sqlQuery: string, params: any[] = []): Promise<{ chang
   return { changes };
 }
 
-/**
- * Alias de run para compatibilidad con execute
- */
 export const execute = run;
 
-/**
- * Ejecuta un bloque de sentencias SQL directas (migraciones, DDL)
- */
 export async function exec(sqlQuery: string): Promise<void> {
   if (isPostgresConfigured) {
     const executor = getPgExecutor();
+    await ensurePgAutoMigrations(executor);
     await executor.query(sqlQuery);
     return;
   }
@@ -289,10 +448,6 @@ export async function exec(sqlQuery: string): Promise<void> {
   saveDb();
 }
 
-/**
- * Ejecuta un bloque dentro de una transacción ACID garantizada
- * En PostgreSQL opera sobre el cliente de transacción sin caer a SQLite.
- */
 export async function transaction<T>(callback: () => Promise<T>): Promise<T> {
   if (isPostgresConfigured) {
     const existingClient = txStorage.getStore();
@@ -303,6 +458,7 @@ export async function transaction<T>(callback: () => Promise<T>): Promise<T> {
     const pool = getPgPool();
     const client: PoolClient = await pool.connect();
     try {
+      await ensurePgAutoMigrations(client);
       await client.query('BEGIN');
       const result = await txStorage.run(client, callback);
       await client.query('COMMIT');

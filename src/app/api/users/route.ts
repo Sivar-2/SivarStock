@@ -1,6 +1,7 @@
 import { NextResponse, NextRequest } from 'next/server';
-import { query, queryOne, execute } from '@/lib/db';
+import { query, queryOne, run } from '@/lib/db';
 import { getCurrentUser, hashPassword } from '@/lib/auth';
+import { logAudit } from '@/lib/audit';
 
 export async function GET() {
   try {
@@ -97,6 +98,7 @@ export async function POST(request: NextRequest) {
 
     const initials = full_name
       .split(' ')
+      .filter(Boolean)
       .map((w: string) => w[0])
       .join('')
       .substring(0, 3)
@@ -106,7 +108,7 @@ export async function POST(request: NextRequest) {
     const id = `USR-${Date.now()}`;
     const allowedTabsJson = JSON.stringify(allowedTabs);
 
-    await execute(
+    await run(
       `INSERT INTO users (
         id, username, full_name, email, password_hash, role,
         department_id, employee_id, initials, allowed_tabs_json,
@@ -130,17 +132,17 @@ export async function POST(request: NextRequest) {
       ]
     );
 
-    // Auditoría
-    await execute(
-      `INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, details_json)
-       VALUES (?, ?, 'USER_CREATED', 'users', ?, ?)`,
-      [
-        `AUD-${Date.now()}`,
-        currentUser.id,
-        id,
-        JSON.stringify({ username, role, department_id, allowedTabs, only_own_department }),
-      ]
-    );
+    await logAudit({
+      userId: currentUser.id,
+      username: currentUser.username,
+      userRole: currentUser.role,
+      action: 'CREAR_USUARIO',
+      module: 'USUARIOS',
+      entityId: id,
+      entityName: `${username} (${full_name})`,
+      afterState: { username, role, department_id, allowedTabs, only_own_department },
+      reason: `Creación de cuenta de usuario con rol ${role}`,
+    });
 
     return NextResponse.json({ success: true, id, message: 'Usuario creado exitosamente con permisos personalizados.' });
   } catch (error: any) {
@@ -182,7 +184,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Protección para el administrador principal
-    if (user.email === 'alexander7tm@gmail.com' && (is_active === false || role !== 'ADMIN')) {
+    if (user.email === 'alexander7tm@gmail.com' && (is_active === false || (role && role !== 'ADMIN'))) {
       return NextResponse.json({ error: 'El administrador principal alexander7tm@gmail.com no puede ser desactivado ni degradado.' }, { status: 400 });
     }
 
@@ -208,7 +210,7 @@ export async function PUT(request: NextRequest) {
 
     params.push(id);
 
-    await execute(
+    await run(
       `UPDATE users SET 
         full_name = ?, 
         email = ?, 
@@ -225,17 +227,17 @@ export async function PUT(request: NextRequest) {
       params
     );
 
-    // Auditoría
-    await execute(
-      `INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, details_json)
-       VALUES (?, ?, 'USER_UPDATED', 'users', ?, ?)`,
-      [
-        `AUD-${Date.now()}`,
-        currentUser.id,
-        id,
-        JSON.stringify({ updatedBy: currentUser.email, role, department_id, allowedTabs, only_own_department }),
-      ]
-    );
+    await logAudit({
+      userId: currentUser.id,
+      username: currentUser.username,
+      userRole: currentUser.role,
+      action: 'MODIFICAR_USUARIO',
+      module: 'USUARIOS',
+      entityId: id,
+      entityName: user.full_name,
+      afterState: { role, department_id, allowedTabs, only_own_department, is_active },
+      reason: `Actualización de permisos para ${user.email}`,
+    });
 
     return NextResponse.json({ success: true, message: 'Permisos actualizados con éxito.' });
   } catch (error: any) {
@@ -258,7 +260,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
     }
 
-    const targetUser = await queryOne<any>('SELECT email FROM users WHERE id = ?', [id]);
+    const targetUser = await queryOne<any>('SELECT email, full_name FROM users WHERE id = ?', [id]);
     if (!targetUser) {
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 });
     }
@@ -268,18 +270,18 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Soft delete para preservar integridad de bitácoras y movimientos
-    await execute('UPDATE users SET is_active = 0 WHERE id = ?', [id]);
+    await run('UPDATE users SET is_active = 0 WHERE id = ?', [id]);
 
-    await execute(
-      `INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, details_json)
-       VALUES (?, ?, 'USER_DEACTIVATED', 'users', ?, ?)`,
-      [
-        `AUD-${Date.now()}`,
-        currentUser.id,
-        id,
-        JSON.stringify({ deactivatedUser: targetUser.email }),
-      ]
-    );
+    await logAudit({
+      userId: currentUser.id,
+      username: currentUser.username,
+      userRole: currentUser.role,
+      action: 'DESACTIVAR_USUARIO',
+      module: 'USUARIOS',
+      entityId: id,
+      entityName: `${targetUser.full_name} (${targetUser.email})`,
+      reason: 'Desactivación de cuenta de usuario',
+    });
 
     return NextResponse.json({ success: true, message: 'Usuario desactivado exitosamente.' });
   } catch (error: any) {

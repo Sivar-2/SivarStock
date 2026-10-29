@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -12,6 +12,11 @@ import {
   Smartphone,
   Layers,
   ArrowLeftRight,
+  UserCheck,
+  Wrench,
+  Globe,
+  Building2,
+  Settings,
   PanelLeftOpen,
 } from 'lucide-react';
 
@@ -21,26 +26,54 @@ interface FloatingDockProps {
   customShortcuts?: { name: string; href: string }[];
 }
 
+const SHORTCUT_MAP: Record<string, { name: string; icon: any }> = {
+  '/': { name: 'Inicio', icon: LayoutDashboard },
+  '/inventario': { name: 'Inventario', icon: Boxes },
+  '/celulares': { name: 'Celulares', icon: Smartphone },
+  '/productos': { name: 'Productos', icon: Layers },
+  '/movimientos': { name: 'Movimientos', icon: ArrowLeftRight },
+  '/asignaciones': { name: 'Asignaciones', icon: UserCheck },
+  '/mantenimiento': { name: 'Averías', icon: Wrench },
+  '/servicios-digitales': { name: 'Servicios', icon: Globe },
+  '/costos': { name: 'Costos', icon: DollarSign },
+  '/reportes': { name: 'Reportes', icon: FileBarChart2 },
+  '/departamentos': { name: 'Áreas', icon: Building2 },
+  '/configuracion': { name: 'Ajustes', icon: Settings },
+};
+
 export default function FloatingDock({
   onOpenScanner,
   onExpandSidebar,
-  customShortcuts,
 }: FloatingDockProps) {
   const pathname = usePathname();
+  const [shortcutHrefs, setShortcutHrefs] = useState<string[]>([
+    '/',
+    '/inventario',
+    '/costos',
+    '/reportes',
+  ]);
 
-  // Atajos predeterminados según el requerimiento:
-  // Izquierda: Inicio | Inventario
-  // Centro: Escanear código QR o de barra
-  // Derecha: Costos | Reportes
-  const defaultShortcuts = [
-    { name: 'Inicio', href: '/', icon: LayoutDashboard },
-    { name: 'Inventario', href: '/inventario', icon: Boxes },
-    { name: 'Costos', href: '/costos', icon: DollarSign },
-    { name: 'Reportes', href: '/reportes', icon: FileBarChart2 },
-  ];
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('sivarstock_dock_shortcuts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length === 4) {
+          setShortcutHrefs(parsed);
+        }
+      }
+    } catch {
+      // Ignorar errores de parseo
+    }
+  }, [pathname]);
 
-  const leftShortcuts = defaultShortcuts.slice(0, 2);
-  const rightShortcuts = defaultShortcuts.slice(2, 4);
+  const resolvedShortcuts = shortcutHrefs.map((href) => {
+    const info = SHORTCUT_MAP[href] || { name: 'Módulo', icon: Boxes };
+    return { href, name: info.name, icon: info.icon };
+  });
+
+  const leftShortcuts = resolvedShortcuts.slice(0, 2);
+  const rightShortcuts = resolvedShortcuts.slice(2, 4);
 
   return (
     <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 transform transition-all duration-300 animate-in fade-in slide-in-from-bottom-5">

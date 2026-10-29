@@ -26,7 +26,9 @@ import {
   Check,
   Eye,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Smartphone,
+  Users
 } from 'lucide-react';
 import {
   BarChart,
@@ -98,11 +100,11 @@ export default function DashboardPage() {
   const digital = data?.stats?.digital || {};
   const movementsStats = data?.stats?.movements || {};
   const bodega = data?.stats?.bodega || {};
-  const maintenanceStats = data?.stats?.maintenance || {};
+  const employeesAndMobiles = data?.stats?.employeesAndMobiles || {};
   const lowStock = data?.lowStockList || [];
   const expiring = data?.expiringServices || [];
+  const expiringMobileContracts = data?.expiringMobileContracts || [];
   const costsByDept = data?.costsByDept || [];
-  const movementsByDept = data?.movementsByDept || [];
   const movements = data?.recentMovements || [];
   const maintenance = data?.maintenanceAlerts || [];
 
@@ -125,8 +127,8 @@ export default function DashboardPage() {
   };
 
   const statusPieData = [
-    { name: 'Disponibles', value: items.available_items || 0, color: '#10B981' },
-    { name: 'Asignados', value: items.assigned_items || 0, color: '#3B82F6' },
+    { name: 'En Bodega (Disponibles)', value: items.available_items || 0, color: '#10B981' },
+    { name: 'En Empleados (Asignados)', value: items.assigned_items || 0, color: '#3B82F6' },
     { name: 'En Revisión/Rep.', value: items.in_revision_items || 0, color: '#F59E0B' },
     { name: 'Dados de Baja', value: items.decommissioned_items || 0, color: '#EF4444' },
   ].filter((d) => d.value > 0);
@@ -145,7 +147,7 @@ export default function DashboardPage() {
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Gestión inteligente de suministros, activos fijos, licencias digitales y finanzas operativas.
+            Control total de inventario (Bodega + Empleados), líneas móviles, contratos de proveedores, licencias y finanzas.
           </p>
         </div>
 
@@ -241,14 +243,14 @@ export default function DashboardPage() {
             </div>
           </Link>
 
-          {/* KPI 2: Servicios y Licencias Digitales */}
+          {/* KPI 2: Servicios, Licencias y Contratos con Proveedores */}
           <Link
             href="/servicios-digitales"
             className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-military-600 hover:shadow-md"
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                Servicios & Licencias
+                Contratos & Licencias
               </span>
               <div className="rounded-lg bg-blue-50 p-2 text-blue-700">
                 <Globe className="h-5 w-5" />
@@ -258,7 +260,9 @@ export default function DashboardPage() {
               <span className="text-2xl sm:text-3xl font-extrabold text-slate-900">
                 {digital.active_services || 0}
               </span>
-              <span className="text-xs text-slate-500">activas / {digital.total_services || 0} totales</span>
+              <span className="text-xs text-slate-500">
+                activas ({digital.supplier_contracts_count || 0} contratos prov.)
+              </span>
             </div>
             <div className="mt-3 flex flex-col gap-0.5 text-xs text-slate-600">
               <div className="flex justify-between">
@@ -274,14 +278,14 @@ export default function DashboardPage() {
             </div>
           </Link>
 
-          {/* KPI 3: Valor de Adquisición */}
+          {/* KPI 3: Valor de Adquisición + Inventario Total (Bodega + Empleados) */}
           <Link
-            href="/costos"
+            href="/inventario"
             className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-military-600 hover:shadow-md"
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                Valor de Adquisición
+                Inventario Total Activos
               </span>
               <div className="rounded-lg bg-emerald-50 p-2 text-emerald-700">
                 <DollarSign className="h-5 w-5" />
@@ -291,39 +295,42 @@ export default function DashboardPage() {
               <span className="text-xl sm:text-2xl font-black text-slate-900 block truncate">
                 {formatGTQ(items.total_acquisition_cost_gtq)}
               </span>
-              <span className="text-xs text-slate-500">valor histórico de activos</span>
+              <span className="text-xs text-slate-500">
+                {items.total_items || 0} activos ({items.available_items || 0} Bodega + {items.assigned_items || 0} Empleados)
+              </span>
             </div>
             <div className="mt-3 text-[11px] text-slate-500 flex justify-between">
-              <span>{items.known_cost_count || 0} ítems valorados</span>
-              <span className="text-emerald-700 font-semibold">{items.total_items || 0} equipos</span>
+              <span>{employeesAndMobiles.active_employees || 0} empleados activos</span>
+              <span className="text-emerald-700 font-semibold">Ver conciliación →</span>
             </div>
           </Link>
 
-          {/* KPI 4: Total de Movimientos y Cambios */}
+          {/* KPI 4: Líneas de Teléfono y Contratos Móviles */}
           <Link
-            href="/movimientos"
+            href="/celulares"
             className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-military-600 hover:shadow-md"
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                Movimientos ({period})
+                Líneas Móviles & Planes
               </span>
-              <div className="rounded-lg bg-military-50 p-2 text-military-700">
-                <RefreshCw className="h-5 w-5" />
+              <div className="rounded-lg bg-purple-50 p-2 text-purple-700">
+                <Smartphone className="h-5 w-5" />
               </div>
             </div>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-extrabold text-slate-900">
-                {movementsStats.total_movements_period || 0}
+                {employeesAndMobiles.total_mobile_lines || 0}
               </span>
-              <span className="text-xs text-slate-500">movimientos</span>
+              <span className="text-xs text-slate-500">
+                líneas ({employeesAndMobiles.assigned_mobile_lines || 0} asignadas)
+              </span>
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
-              <span className="text-emerald-600 font-semibold">+{movementsStats.entradas_count || 0} Entradas</span>
-              <span>•</span>
-              <span className="text-blue-600 font-semibold">{movementsStats.asignaciones_count || 0} Asignados</span>
-              <span>•</span>
-              <span className="text-amber-600 font-semibold">-{movementsStats.salidas_count || 0} Salidas</span>
+              <span>Canon mensual:</span>
+              <span className="font-bold text-purple-700">
+                {formatGTQ(employeesAndMobiles.monthly_mobile_spend_gtq)}/mes
+              </span>
             </div>
           </Link>
         </div>
@@ -346,18 +353,23 @@ export default function DashboardPage() {
                 </span>
               </div>
               <h2 className="text-lg font-bold text-white mt-1">
-                Inventario Físico en Custodia
+                Inventario Físico en Custodia + Equipos en Empleados
               </h2>
               <p className="text-xs text-slate-300">
-                Equipos y suministros listos para asignación a los 11 departamentos de la empresa.
+                Todo equipo asignado a un empleado se suma automáticamente al inventario total de la empresa.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-6 border-t border-white/10 pt-3 md:border-t-0 md:pt-0">
+          <div className="flex flex-wrap items-center gap-5 border-t border-white/10 pt-3 md:border-t-0 md:pt-0">
             <div>
-              <span className="text-[11px] text-slate-400 block uppercase">Equipos Disponibles</span>
+              <span className="text-[11px] text-slate-400 block uppercase">En Bodega</span>
               <span className="text-xl font-black text-white">{bodega.bodega_available_items || 0} un.</span>
+            </div>
+            <div className="h-8 w-px bg-white/10" />
+            <div>
+              <span className="text-[11px] text-slate-400 block uppercase">En Empleados</span>
+              <span className="text-xl font-black text-blue-300">{items.assigned_items || 0} un.</span>
             </div>
             <div className="h-8 w-px bg-white/10" />
             <div>
@@ -366,10 +378,10 @@ export default function DashboardPage() {
             </div>
             <div className="h-8 w-px bg-white/10" />
             <Link
-              href="/inventario?bodega=true"
+              href="/inventario"
               className="rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-500 transition shadow-sm"
             >
-              Ver Bodega
+              Inventario y Recuento
             </Link>
           </div>
         </div>
@@ -422,7 +434,7 @@ export default function DashboardPage() {
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col justify-between">
             <div className="border-b border-slate-100 pb-3">
               <h2 className="text-sm font-bold text-slate-900">Estado Operativo de Activos</h2>
-              <p className="text-xs text-slate-500">Disponibilidad en planta y oficinas</p>
+              <p className="text-xs text-slate-500">Bodega vs Asignados a Empleados</p>
             </div>
 
             <div className="my-2 h-48 w-full flex items-center justify-center">
@@ -453,7 +465,7 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 gap-2 text-xs">
               {statusPieData.map((st) => (
                 <div key={st.name} className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: st.color }} />
+                  <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: st.color }} />
                   <span className="text-slate-600 truncate">{st.name}:</span>
                   <span className="font-bold text-slate-900">{st.value}</span>
                 </div>
@@ -561,56 +573,94 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* 4. Próximos Vencimientos y Últimos Movimientos de Kardex */}
+      {/* 4. Próximos Vencimientos (Contratos Proveedores, Licencias y Líneas Móviles) y Movimientos */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Alertas de Vencimiento de Licencias y Servicios */}
+        {/* Alertas de Vencimiento de Licencias, Contratos de Proveedores y Líneas Móviles */}
         {widgets.expiringServices && (
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-brandRed-600" />
-                <h2 className="text-sm font-bold text-slate-900">Vencimientos de Licencias (35 días)</h2>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Vencimientos Próximos: Contratos Proveedores, Licencias y Líneas
+                </h2>
               </div>
               <Link
                 href="/servicios-digitales"
                 className="text-xs font-semibold text-military-700 hover:text-military-900"
               >
-                Ver todas
+                Ver contratos
               </Link>
             </div>
 
             <div className="mt-3 divide-y divide-slate-100">
-              {expiring.length > 0 ? (
-                expiring.map((srv: any) => (
-                  <div key={srv.id} className="flex items-center justify-between py-2.5 text-xs">
-                    <div>
-                      <span className="font-bold text-slate-800">{srv.name}</span>
-                      <span className="block text-[11px] text-slate-500">
-                        {srv.provider} • {srv.cost_period} ({srv.currency === 'USD' ? formatUSD(srv.amount) : formatGTQ(srv.amount)})
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span
-                        className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                          srv.days_remaining <= 7
-                            ? 'bg-red-100 text-brandRed-700 animate-pulse'
-                            : srv.days_remaining <= 15
-                            ? 'bg-amber-100 text-amber-700'
-                            : 'bg-blue-100 text-blue-700'
-                        }`}
-                      >
-                        {srv.days_remaining} días restantes
-                      </span>
-                      <span className="block text-[10px] text-slate-400 mt-0.5">
-                        Vence: {srv.expiration_date}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              ) : (
+              {expiring.length === 0 && expiringMobileContracts.length === 0 ? (
                 <div className="py-6 text-center text-xs text-slate-400">
-                  No hay licencias ni dominios con vencimiento en los próximos 35 días.
+                  No hay contratos con proveedores, licencias ni planes móviles próximos a vencer.
                 </div>
+              ) : (
+                <>
+                  {expiring.map((srv: any) => (
+                    <div key={srv.id} className="flex items-center justify-between py-2.5 text-xs">
+                      <div>
+                        <span className="font-bold text-slate-800">{srv.name}</span>
+                        <span className="block text-[11px] text-slate-500">
+                          Proveedor: {srv.provider} • {srv.cost_period} (
+                          {srv.currency === 'USD' ? formatUSD(srv.amount) : formatGTQ(srv.amount)})
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span
+                          className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            srv.days_remaining <= 7
+                              ? 'bg-red-100 text-brandRed-700 animate-pulse'
+                              : srv.days_remaining <= 15
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}
+                        >
+                          {srv.days_remaining} días restantes
+                        </span>
+                        <span className="block text-[10px] text-slate-400 mt-0.5">
+                          Vence: {srv.expiration_date}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  {expiringMobileContracts.map((mob: any) => (
+                    <div key={mob.id} className="flex items-center justify-between py-2.5 text-xs">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <Smartphone className="h-3.5 w-3.5 text-purple-600" />
+                          <span className="font-bold text-slate-800">
+                            Línea {mob.phone_number} ({mob.carrier || 'Operadora'})
+                          </span>
+                        </div>
+                        <span className="block text-[11px] text-slate-500">
+                          {mob.employee_name || 'Sin asignar'} • {mob.brand} {mob.model}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span
+                          className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            mob.days_remaining < 0
+                              ? 'bg-rose-100 text-rose-700'
+                              : mob.days_remaining <= 15
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-purple-100 text-purple-800'
+                          }`}
+                        >
+                          {mob.days_remaining < 0
+                            ? `Vencido hace ${Math.abs(mob.days_remaining)}d`
+                            : `${mob.days_remaining} días restantes`}
+                        </span>
+                        <span className="block text-[10px] text-slate-400 mt-0.5">
+                          Fin contrato: {mob.contract_end_date}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </>
               )}
             </div>
           </div>
@@ -684,13 +734,13 @@ export default function DashboardPage() {
 
             <div className="mt-4 space-y-2.5 max-h-96 overflow-y-auto pr-1">
               {[
-                { key: 'kpis', label: 'Tarjetas Resumen (Stock bajo, Licencias, Adquisición, Movimientos)' },
-                { key: 'bodegaCard', label: 'Resumen Cuarto de Servidores (Bodega Central)' },
+                { key: 'kpis', label: 'Tarjetas Resumen (Stock bajo, Contratos, Inventario Total, Líneas)' },
+                { key: 'bodegaCard', label: 'Resumen Cuarto de Servidores (Bodega + Empleados)' },
                 { key: 'costsChart', label: 'Gráfico: Costos Imputados por Departamento (GTQ)' },
                 { key: 'assetStatus', label: 'Gráfico: Estado Operativo de Activos' },
                 { key: 'lowStockTable', label: 'Tabla: Suministros Bajo Stock Mínimo' },
                 { key: 'maintenanceAlerts', label: 'Tabla: Averías y Mantenimientos Activos' },
-                { key: 'expiringServices', label: 'Tabla: Vencimientos de Licencias (35 días)' },
+                { key: 'expiringServices', label: 'Tabla: Vencimientos de Contratos, Licencias y Líneas' },
                 { key: 'movementsLog', label: 'Bitácora: Movimientos Recientes de Kardex' },
               ].map((item) => (
                 <label

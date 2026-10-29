@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -46,10 +46,10 @@ export const allNavigationItems = [
   { name: 'Entradas y movimientos', href: '/movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS', adminOnly: true },
   { name: 'Asignaciones a personal', href: '/asignaciones', icon: UserCheck, tabKey: 'ASIGNACIONES' },
   { name: 'Averías y mantenimiento', href: '/mantenimiento', icon: Wrench, tabKey: 'MANTENIMIENTO', badgeKey: 'brokenItems' },
-  { name: 'Licencias y servicios', href: '/servicios-digitales', icon: Globe, tabKey: 'SERVICIOS', badgeKey: 'expiringServices' },
+  { name: 'Licencias y contratos', href: '/servicios-digitales', icon: Globe, tabKey: 'SERVICIOS', badgeKey: 'expiringServices' },
   { name: 'Costos y facturas', href: '/costos', icon: DollarSign, tabKey: 'COSTOS' },
   { name: 'Reportes y métricas', href: '/reportes', icon: FileBarChart2, tabKey: 'REPORTES' },
-  { name: 'Áreas y departamentos', href: '/departamentos', icon: Building2, tabKey: 'DEPARTAMENTOS' },
+  { name: 'Áreas y empleados', href: '/departamentos', icon: Building2, tabKey: 'DEPARTAMENTOS' },
   { name: 'Usuarios y permisos', href: '/usuarios', icon: Users, tabKey: 'USUARIOS', adminOnly: true },
   { name: 'Historial de auditoría', href: '/auditoria', icon: History, tabKey: 'AUDITORIA', adminOnly: true },
   { name: 'Configuración', href: '/configuracion', icon: Settings, tabKey: 'CONFIGURACION' },
@@ -63,6 +63,21 @@ export default function Sidebar({
   alertCounts = {},
 }: SidebarProps) {
   const pathname = usePathname();
+  const [customTabNames, setCustomTabNames] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const loadNames = () => {
+      try {
+        const saved = localStorage.getItem('sivarstock_tab_names');
+        if (saved) setCustomTabNames(JSON.parse(saved));
+      } catch {
+        // Ignorar errores de parseo
+      }
+    };
+    loadNames();
+    window.addEventListener('storage', loadNames);
+    return () => window.removeEventListener('storage', loadNames);
+  }, [pathname]);
 
   // Filtrado de pestañas según permisos del usuario (RBAC granular)
   const userAllowedTabs = currentUser?.allowedTabs || [
@@ -72,11 +87,9 @@ export default function Sidebar({
   ];
 
   const visibleItems = allNavigationItems.filter((item) => {
-    // Solo administrador ve auditoría y gestión de usuarios
     if (item.adminOnly && currentUser?.role !== 'ADMIN') {
       return false;
     }
-    // Si el usuario no es admin, verificar allowed_tabs_json
     if (currentUser?.role !== 'ADMIN' && !userAllowedTabs.includes(item.tabKey)) {
       return false;
     }
@@ -120,7 +133,6 @@ export default function Sidebar({
           </button>
 
           <div className="flex items-center gap-1">
-            {/* Botón para colapsar en desktop */}
             {onToggleCollapse && (
               <button
                 onClick={onToggleCollapse}
@@ -131,7 +143,6 @@ export default function Sidebar({
               </button>
             )}
 
-            {/* Botón cerrar en móvil */}
             <button
               onClick={onClose}
               className="rounded-lg p-1 text-slate-400 hover:bg-military-800 hover:text-white lg:hidden"
@@ -148,6 +159,7 @@ export default function Sidebar({
             const Icon = item.icon;
             const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
             const badgeCount = item.badgeKey ? (alertCounts as any)[item.badgeKey] : 0;
+            const displayLabel = customTabNames[item.href] || item.name;
 
             return (
               <Link
@@ -166,7 +178,7 @@ export default function Sidebar({
                       isActive ? 'text-emerald-400' : 'text-slate-400 group-hover:text-slate-200'
                     }`}
                   />
-                  <span className="truncate">{item.name}</span>
+                  <span className="truncate">{displayLabel}</span>
                 </div>
 
                 {badgeCount > 0 && (

@@ -30,13 +30,17 @@ export async function POST(req: NextRequest) {
           i.permanent_code,
           p.code as product_code,
           p.name as product_name,
-          p.category as category_name,
+          c.name as category_name,
           i.brand,
           i.model,
           i.serial_number,
+          i.mac_address,
+          i.imei,
+          i.ip_address,
+          i.hostname,
           d.name as department_name,
           d.code as department_code,
-          e.full_name as assigned_user_name,
+          COALESCE(e.full_name, u.full_name) as assigned_user_name,
           i.operational_status,
           i.physical_condition,
           i.purchase_price,
@@ -49,8 +53,10 @@ export async function POST(req: NextRequest) {
           p.unit_of_measure
         FROM inventory_items i
         JOIN products p ON i.product_id = p.id
+        LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN departments d ON i.current_department_id = d.id
-        LEFT JOIN employees e ON i.assigned_employee_id = e.id
+        LEFT JOIN employees e ON i.current_employee_id = e.id
+        LEFT JOIN users u ON i.current_assigned_user_id = u.id
         WHERE 1=1
       `;
 
@@ -63,7 +69,7 @@ export async function POST(req: NextRequest) {
         params.push(filters.status);
       }
       if (filters.employeeId) {
-        baseSql += ` AND i.assigned_employee_id = ?`;
+        baseSql += ` AND i.current_employee_id = ?`;
         params.push(filters.employeeId);
       }
     } else if (module === 'BODEGA') {
@@ -73,10 +79,12 @@ export async function POST(req: NextRequest) {
           i.permanent_code,
           p.code as product_code,
           p.name as product_name,
-          p.category as category_name,
+          c.name as category_name,
           i.brand,
           i.model,
           i.serial_number,
+          i.mac_address,
+          i.imei,
           d.name as department_name,
           i.operational_status,
           i.purchase_price,
@@ -84,6 +92,7 @@ export async function POST(req: NextRequest) {
           i.purchase_date
         FROM inventory_items i
         JOIN products p ON i.product_id = p.id
+        LEFT JOIN categories c ON p.category_id = c.id
         JOIN departments d ON i.current_department_id = d.id
         WHERE d.is_bodega = 1
       `;
@@ -94,8 +103,16 @@ export async function POST(req: NextRequest) {
           m.device_code,
           m.brand,
           m.model,
+          m.serial_number,
+          m.mac_address,
           m.phone_number,
           m.imei,
+          m.sim_iccid,
+          m.carrier,
+          m.plan_name,
+          m.monthly_cost,
+          m.contract_number,
+          m.contract_end_date,
           m.status,
           m.delivery_date,
           m.notes_history as notes,
@@ -103,12 +120,12 @@ export async function POST(req: NextRequest) {
           d.name as department_name
         FROM mobile_devices m
         LEFT JOIN employees e ON m.employee_id = e.id
-        LEFT JOIN departments d ON m.department_id = d.id
+        LEFT JOIN departments d ON COALESCE(m.department_id, e.department_id) = d.id
         WHERE 1=1
       `;
       if (filters.departmentId) {
-        baseSql += ` AND m.department_id = ?`;
-        params.push(filters.departmentId);
+        baseSql += ` AND (m.department_id = ? OR e.department_id = ?)`;
+        params.push(filters.departmentId, filters.departmentId);
       }
     } else if (module === 'MANTENIMIENTO') {
       baseSql = `
@@ -119,9 +136,9 @@ export async function POST(req: NextRequest) {
           mr.severity,
           mr.status,
           mr.solution_type,
-          mr.solution_notes,
-          mr.cost,
-          mr.repair_date,
+          mr.resolution_notes as solution_notes,
+          mr.repair_cost as cost,
+          mr.resolved_date as repair_date,
           i.permanent_code,
           p.name as product_name,
           d.name as department_name,
@@ -155,8 +172,8 @@ export async function POST(req: NextRequest) {
           c.supplier,
           c.invoice_number,
           c.purchase_order,
-          c.warranty_doc_url,
-          c.invoice_doc_url,
+          c.warranty_document_url as warranty_doc_url,
+          c.invoice_document_url as invoice_doc_url,
           d_chg.name as charged_dept_name,
           i.permanent_code,
           p.name as product_name
@@ -195,7 +212,7 @@ export async function POST(req: NextRequest) {
           d_to.name as to_dept_name,
           u.full_name as executed_by_name
         FROM inventory_movements m
-        JOIN products p ON m.product_id = p.id
+        LEFT JOIN products p ON m.product_id = p.id
         LEFT JOIN departments d_from ON m.from_department_id = d_from.id
         LEFT JOIN departments d_to ON m.to_department_id = d_to.id
         LEFT JOIN users u ON m.user_id = u.id
@@ -214,8 +231,10 @@ export async function POST(req: NextRequest) {
         SELECT 
           s.id,
           s.name,
-          s.category,
+          COALESCE(lc.name, s.category_legacy, 'Servicio / Contrato') as category,
           s.provider,
+          s.contract_number,
+          s.contract_type,
           s.cost_period,
           s.amount,
           s.currency,
@@ -226,6 +245,7 @@ export async function POST(req: NextRequest) {
           d.name as department_name,
           CAST((julianday(s.expiration_date) - julianday('now')) AS INTEGER) as days_remaining
         FROM digital_services s
+        LEFT JOIN license_categories lc ON s.category_id = lc.id
         LEFT JOIN departments d ON s.responsible_department_id = d.id
         WHERE 1=1
       `;
@@ -239,11 +259,12 @@ export async function POST(req: NextRequest) {
           a.employee_id,
           i.permanent_code,
           p.name as product_name,
-          e.full_name as user_name,
+          COALESCE(e.full_name, u.full_name) as user_name,
           d.name as target_dept_name
         FROM assignments a
-        JOIN products p ON a.product_id = p.id
-        LEFT JOIN employees e ON COALESCE(a.employee_id, a.user_id) = e.id
+        LEFT JOIN products p ON a.product_id = p.id
+        LEFT JOIN employees e ON a.employee_id = e.id
+        LEFT JOIN users u ON a.user_id = u.id
         LEFT JOIN inventory_items i ON a.item_id = i.id
         LEFT JOIN departments d ON a.target_department_id = d.id
         WHERE 1=1
@@ -254,14 +275,14 @@ export async function POST(req: NextRequest) {
 
     const ALLOWED_SORT_COLUMNS = new Set([
       'id', 'permanent_code', 'product_code', 'product_name', 'category_name',
-      'brand', 'model', 'serial_number', 'department_name', 'department_code',
+      'brand', 'model', 'serial_number', 'mac_address', 'imei', 'department_name', 'department_code',
       'assigned_user_name', 'operational_status', 'physical_condition',
       'purchase_price', 'replacement_value', 'supplier', 'purchase_date',
       'warranty_expiration', 'invoice_number', 'created_at', 'device_code',
-      'phone_number', 'imei', 'status', 'delivery_date', 'reported_date',
+      'phone_number', 'status', 'delivery_date', 'reported_date',
       'severity', 'cost', 'repair_date', 'expense_date', 'concept', 'amount',
       'total_amount', 'movement_type', 'quantity', 'unit_cost', 'total_cost',
-      'assigned_at'
+      'assigned_at', 'contract_end_date', 'expiration_date'
     ]);
 
     const safeDir = String(sortDir).toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
@@ -284,13 +305,14 @@ export async function POST(req: NextRequest) {
         delete sanitized.total_amount;
         delete sanitized.unit_cost;
         delete sanitized.total_cost;
+        delete sanitized.monthly_cost;
         return sanitized;
       }
       return r;
     });
 
     // Agrupación opcional
-    let groupedSummary: Record<string, { count: number; totalAmount?: number }> = {};
+    const groupedSummary: Record<string, { count: number; totalAmount?: number }> = {};
     if (groupBy && rows.length > 0) {
       rows.forEach((r: any) => {
         const key = r[groupBy] || 'Sin especificar';
@@ -303,6 +325,8 @@ export async function POST(req: NextRequest) {
             groupedSummary[key].totalAmount = (groupedSummary[key].totalAmount || 0) + Number(r.total_amount);
           } else if (r.purchase_price) {
             groupedSummary[key].totalAmount = (groupedSummary[key].totalAmount || 0) + Number(r.purchase_price);
+          } else if (r.amount) {
+            groupedSummary[key].totalAmount = (groupedSummary[key].totalAmount || 0) + Number(r.amount);
           }
         }
       });
@@ -316,6 +340,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('Error al ejecutar reporte:', error);
-    return NextResponse.json({ error: 'Error al procesar consulta de reporte.' }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Error al procesar consulta de reporte.' }, { status: 500 });
   }
 }

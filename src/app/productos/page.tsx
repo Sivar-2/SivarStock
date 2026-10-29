@@ -69,6 +69,9 @@ export default function ProductosPage() {
   const [assignEmployeeId, setAssignEmployeeId] = useState('');
   const [assignQuantity, setAssignQuantity] = useState('1');
   const [assignReason, setAssignReason] = useState('');
+  const [assignSerial, setAssignSerial] = useState('');
+  const [assignMac, setAssignMac] = useState('');
+  const [assignImei, setAssignImei] = useState('');
 
   // Formulario Descontar stock
   const [deductQuantity, setDeductQuantity] = useState('1');
@@ -161,7 +164,10 @@ export default function ProductosPage() {
       const res = await fetch(`/api/products?id=${p.id}`);
       const data = await res.json();
       if (data.product) {
-        setActiveProduct(data.product);
+        setActiveProduct({
+          ...p,
+          ...data.product,
+        });
         setEditForm({
           id: data.product.id,
           name: data.product.name || '',
@@ -203,10 +209,9 @@ export default function ProductosPage() {
 
       setIsEditingProduct(false);
       await loadData();
-      // Refrescar activo
       const resUpdated = await fetch(`/api/products?id=${editForm.id}`);
       const dataUpdated = await resUpdated.json();
-      if (dataUpdated.product) setActiveProduct(dataUpdated.product);
+      if (dataUpdated.product) setActiveProduct((prev: any) => ({ ...prev, ...dataUpdated.product }));
       setFeedback({ type: 'success', message: '¡Producto modificado exitosamente!' });
     } catch (err: any) {
       alert(`Error al modificar producto: ${err.message}`);
@@ -289,6 +294,9 @@ export default function ProductosPage() {
           employeeId: assignEmployeeId,
           quantity: Number(assignQuantity),
           reason: assignReason,
+          serialNumber: assignSerial.trim() || null,
+          macAddress: assignMac.trim() || null,
+          imei: assignImei.trim() || null,
         }),
       });
 
@@ -299,6 +307,9 @@ export default function ProductosPage() {
       setAssignQuantity('1');
       setAssignReason('');
       setAssignEmployeeId('');
+      setAssignSerial('');
+      setAssignMac('');
+      setAssignImei('');
       alert(data.message || 'Asignación realizada con éxito.');
       loadData();
       if (showDetailModal) {
@@ -421,7 +432,7 @@ export default function ProductosPage() {
               Catálogo de Productos y Suministros
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Inventario general • Asignación directa a empleados restando de bodega • Precios unitarios y por caja en Quetzales (Q)
+              Inventario Total = Bodega + Asignados a Empleados • Asignación directa a personal • Precios en Quetzales (Q)
             </p>
           </div>
 
@@ -529,14 +540,28 @@ export default function ProductosPage() {
                   </div>
 
                   <div className="mt-4 pt-3 border-t border-slate-100">
-                    <div className="flex items-center justify-between text-xs mb-2">
-                      <span className="text-slate-500">Stock Bodega:</span>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-slate-500">En Bodega:</span>
                       <span
                         className={`font-mono font-bold ${
                           isLowStock ? 'text-rose-600' : 'text-slate-900'
                         }`}
                       >
                         {p.current_stock} {p.unit_of_measure}s
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-slate-500">En Empleados:</span>
+                      <span className="font-mono font-bold text-blue-700">
+                        {p.assigned_to_employees || 0} asignados
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs mb-2 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
+                      <span className="font-semibold text-slate-700">Inventario Total:</span>
+                      <span className="font-mono font-black text-slate-900">
+                        {p.total_company_inventory ?? p.current_stock} un.
                       </span>
                     </div>
 
@@ -556,7 +581,7 @@ export default function ProductosPage() {
                           setShowAssignModal(true);
                         }}
                         className="flex-1 flex items-center justify-center gap-1 rounded-xl bg-emerald-50 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 transition"
-                        title="Asignar a empleado restando de inventario"
+                        title="Asignar a empleado restando de bodega y sumando a expediente"
                       >
                         <UserCheck className="h-3.5 w-3.5" />
                         <span>Asignar</span>
@@ -580,7 +605,7 @@ export default function ProductosPage() {
           )}
         </div>
 
-        {/* MODAL DETALLES DEL PRODUCTO (Imagen, Múltiples Proveedores, Historial de Precios, Desglose y Modificación) */}
+        {/* MODAL DETALLES DEL PRODUCTO */}
         {showDetailModal && activeProduct && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
             <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl animate-in fade-in zoom-in-95">
@@ -785,172 +810,182 @@ export default function ProductosPage() {
               ) : (
                 /* VISTA REGULAR DE DETALLES */
                 <>
-
-              {/* Imagen del producto si existe */}
-              {activeProduct.image_url && (
-                <div className="mt-4 h-48 w-full overflow-hidden rounded-xl bg-slate-50 border border-slate-100">
-                  <img
-                    src={activeProduct.image_url}
-                    alt={activeProduct.name}
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-              )}
-
-              {/* Parámetros Financieros y de Stock */}
-              <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100 text-xs">
-                <div>
-                  <span className="text-slate-500 block">Stock en Bodega</span>
-                  <span className="text-sm font-bold font-mono text-slate-900">
-                    {activeProduct.current_stock} {activeProduct.unit_of_measure}s
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Precio Unitario</span>
-                  <span className="text-sm font-bold font-mono text-emerald-700">
-                    Q{Number(activeProduct.unit_price || 0).toLocaleString('es-GT', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Precio por Caja</span>
-                  <span className="text-sm font-bold font-mono text-slate-900">
-                    Q{Number(activeProduct.box_price || 0).toLocaleString('es-GT', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Unidades por Caja</span>
-                  <span className="text-sm font-bold font-mono text-slate-900">
-                    {activeProduct.units_per_box || 1} unids
-                  </span>
-                </div>
-              </div>
-
-              {/* Múltiples Proveedores Habituales */}
-              <div className="mt-5">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-1.5">
-                  <Building className="h-4 w-4 text-emerald-600" />
-                  Proveedores Habituales ({productSuppliers.length})
-                </h4>
-
-                <div className="space-y-1.5 mb-3">
-                  {productSuppliers.length === 0 ? (
-                    <p className="text-xs text-slate-400 italic">No hay proveedores registrados aún.</p>
-                  ) : (
-                    productSuppliers.map((s) => (
-                      <div
-                        key={s.id}
-                        className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs border border-slate-100"
-                      >
-                        <span className="font-semibold text-slate-800">{s.supplier_name}</span>
-                        <span className="text-slate-500">{s.contact_info || 'Sin contacto'}</span>
-                      </div>
-                    ))
+                  {activeProduct.image_url && (
+                    <div className="mt-4 h-48 w-full overflow-hidden rounded-xl bg-slate-50 border border-slate-100">
+                      <img
+                        src={activeProduct.image_url}
+                        alt={activeProduct.name}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
                   )}
-                </div>
 
-                {/* Agregar Proveedor adicional */}
-                <div className="flex gap-2 text-xs">
-                  <input
-                    type="text"
-                    placeholder="Nuevo proveedor habitual..."
-                    value={newSupplierName}
-                    onChange={(e) => setNewSupplierName(e.target.value)}
-                    className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 focus:border-emerald-600 focus:outline-none"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Contacto / Teléfono"
-                    value={newSupplierContact}
-                    onChange={(e) => setNewSupplierContact(e.target.value)}
-                    className="w-1/3 rounded-xl border border-slate-200 px-3 py-1.5 focus:border-emerald-600 focus:outline-none"
-                  />
-                  <button
-                    onClick={handleAddSupplier}
-                    disabled={!newSupplierName.trim()}
-                    className="rounded-xl bg-emerald-700 px-3 py-1.5 font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
-                  >
-                    + Agregar
-                  </button>
-                </div>
-              </div>
+                  {/* Parámetros Financieros y de Stock */}
+                  <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100 text-xs">
+                    <div>
+                      <span className="text-slate-500 block">Stock en Bodega</span>
+                      <span className="text-sm font-bold font-mono text-slate-900">
+                        {activeProduct.current_stock} {activeProduct.unit_of_measure}s
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Asignados a Empleados</span>
+                      <span className="text-sm font-bold font-mono text-blue-700">
+                        {activeProduct.assigned_to_employees || 0} {activeProduct.unit_of_measure}s
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Inventario Total (Bodega + Personal)</span>
+                      <span className="text-sm font-black font-mono text-emerald-800">
+                        {activeProduct.total_company_inventory ?? activeProduct.current_stock} {activeProduct.unit_of_measure}s
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Precio Unitario</span>
+                      <span className="text-sm font-bold font-mono text-emerald-700">
+                        Q{Number(activeProduct.unit_price || 0).toLocaleString('es-GT', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Precio por Caja</span>
+                      <span className="text-sm font-bold font-mono text-slate-900">
+                        Q{Number(activeProduct.box_price || 0).toLocaleString('es-GT', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Unidades por Caja</span>
+                      <span className="text-sm font-bold font-mono text-slate-900">
+                        {activeProduct.units_per_box || 1} unids
+                      </span>
+                    </div>
+                  </div>
 
-              {/* Historial de Precios de Compra */}
-              <div className="mt-5">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-1.5">
-                  <History className="h-4 w-4 text-emerald-600" />
-                  Historial de Precios de Compra
-                </h4>
+                  {/* Múltiples Proveedores Habituales */}
+                  <div className="mt-5">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-1.5">
+                      <Building className="h-4 w-4 text-emerald-600" />
+                      Proveedores Habituales ({productSuppliers.length})
+                    </h4>
 
-                <div className="overflow-hidden rounded-xl border border-slate-100 text-xs">
-                  <table className="w-full text-left">
-                    <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
-                      <tr>
-                        <th className="py-2 px-3">Fecha</th>
-                        <th className="py-2 px-3">Precio Unitario</th>
-                        <th className="py-2 px-3">Proveedor</th>
-                        <th className="py-2 px-3">Factura / Nota</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {priceHistory.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="py-4 text-center text-slate-400">
-                            Sin historial de compras anteriores registrado.
-                          </td>
-                        </tr>
+                    <div className="space-y-1.5 mb-3">
+                      {productSuppliers.length === 0 ? (
+                        <p className="text-xs text-slate-400 italic">No hay proveedores registrados aún.</p>
                       ) : (
-                        priceHistory.map((ph) => (
-                          <tr key={ph.id}>
-                            <td className="py-2 px-3 font-mono">{ph.purchase_date}</td>
-                            <td className="py-2 px-3 font-mono font-bold text-emerald-700">
-                              Q{Number(ph.unit_price).toLocaleString('es-GT', { minimumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-2 px-3">{ph.supplier_name || 'N/A'}</td>
-                            <td className="py-2 px-3 text-slate-500">{ph.invoice_number || ph.notes || '-'}</td>
-                          </tr>
+                        productSuppliers.map((s) => (
+                          <div
+                            key={s.id}
+                            className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs border border-slate-100"
+                          >
+                            <span className="font-semibold text-slate-800">{s.supplier_name}</span>
+                            <span className="text-slate-500">{s.contact_info || 'Sin contacto'}</span>
+                          </div>
                         ))
                       )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                    </div>
 
-              {/* Botones de Acción */}
-              <div className="mt-6 flex justify-between border-t border-slate-100 pt-4">
-                <button
-                  onClick={() => handleDeleteProduct(activeProduct)}
-                  className="flex items-center gap-1 rounded-xl text-rose-600 hover:bg-rose-50 px-3 py-2 text-xs font-semibold"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  <span>Eliminar Producto</span>
-                </button>
+                    {/* Agregar Proveedor adicional */}
+                    <div className="flex gap-2 text-xs">
+                      <input
+                        type="text"
+                        placeholder="Nuevo proveedor habitual..."
+                        value={newSupplierName}
+                        onChange={(e) => setNewSupplierName(e.target.value)}
+                        className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 focus:border-emerald-600 focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Contacto / Teléfono"
+                        value={newSupplierContact}
+                        onChange={(e) => setNewSupplierContact(e.target.value)}
+                        className="w-1/3 rounded-xl border border-slate-200 px-3 py-1.5 focus:border-emerald-600 focus:outline-none"
+                      />
+                      <button
+                        onClick={handleAddSupplier}
+                        disabled={!newSupplierName.trim()}
+                        className="rounded-xl bg-emerald-700 px-3 py-1.5 font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                      >
+                        + Agregar
+                      </button>
+                    </div>
+                  </div>
 
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      setShowAssignModal(true);
-                    }}
-                    className="flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
-                  >
-                    <UserCheck className="h-4 w-4" />
-                    <span>Asignar a Empleado</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowDeductModal(true);
-                    }}
-                    className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    <MinusCircle className="h-4 w-4" />
-                    <span>Descontar Stock</span>
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    )}
+                  {/* Historial de Precios de Compra */}
+                  <div className="mt-5">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-1.5">
+                      <History className="h-4 w-4 text-emerald-600" />
+                      Historial de Precios de Compra
+                    </h4>
+
+                    <div className="overflow-hidden rounded-xl border border-slate-100 text-xs">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
+                          <tr>
+                            <th className="py-2 px-3">Fecha</th>
+                            <th className="py-2 px-3">Precio Unitario</th>
+                            <th className="py-2 px-3">Proveedor</th>
+                            <th className="py-2 px-3">Factura / Nota</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {priceHistory.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="py-4 text-center text-slate-400">
+                                Sin historial de compras anteriores registrado.
+                              </td>
+                            </tr>
+                          ) : (
+                            priceHistory.map((ph) => (
+                              <tr key={ph.id}>
+                                <td className="py-2 px-3 font-mono">{ph.purchase_date}</td>
+                                <td className="py-2 px-3 font-mono font-bold text-emerald-700">
+                                  Q{Number(ph.unit_price).toLocaleString('es-GT', { minimumFractionDigits: 2 })}
+                                </td>
+                                <td className="py-2 px-3">{ph.supplier_name || 'N/A'}</td>
+                                <td className="py-2 px-3 text-slate-500">{ph.invoice_number || ph.notes || '-'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Botones de Acción */}
+                  <div className="mt-6 flex justify-between border-t border-slate-100 pt-4">
+                    <button
+                      onClick={() => handleDeleteProduct(activeProduct)}
+                      className="flex items-center gap-1 rounded-xl text-rose-600 hover:bg-rose-50 px-3 py-2 text-xs font-semibold"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span>Eliminar Producto</span>
+                    </button>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setShowAssignModal(true);
+                        }}
+                        className="flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
+                      >
+                        <UserCheck className="h-4 w-4" />
+                        <span>Asignar a Empleado</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowDeductModal(true);
+                        }}
+                        className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <MinusCircle className="h-4 w-4" />
+                        <span>Descontar Stock</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* MODAL ASIGNAR PRODUCTO A EMPLEADO */}
         {showAssignModal && activeProduct && (
@@ -996,7 +1031,7 @@ export default function ProductosPage() {
                   <input
                     type="number"
                     min="1"
-                    max={activeProduct.current_stock}
+                    max={Math.max(1, activeProduct.current_stock)}
                     required
                     value={assignQuantity}
                     onChange={(e) => setAssignQuantity(e.target.value)}
@@ -1004,11 +1039,49 @@ export default function ProductosPage() {
                   />
                 </div>
 
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <div className="sm:col-span-3">
+                    <span className="text-[11px] font-bold text-slate-600">
+                      Identificadores Técnicos (Opcional — vincula al expediente de activos del empleado)
+                    </span>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-600">N° de Serie</label>
+                    <input
+                      type="text"
+                      placeholder="S/N..."
+                      value={assignSerial}
+                      onChange={(e) => setAssignSerial(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-600">Dirección MAC</label>
+                    <input
+                      type="text"
+                      placeholder="00:1A:2B..."
+                      value={assignMac}
+                      onChange={(e) => setAssignMac(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-600">IMEI</label>
+                    <input
+                      type="text"
+                      placeholder="35489..."
+                      value={assignImei}
+                      onChange={(e) => setAssignImei(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-xs font-medium text-slate-700">Motivo / Detalle de la entrega:</label>
                   <textarea
                     rows={2}
-                    placeholder="ej. Suministro mensual para departamento de empaque..."
+                    placeholder="ej. Suministro o equipo asignado al empleado..."
                     value={assignReason}
                     onChange={(e) => setAssignReason(e.target.value)}
                     className="mt-1 w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-emerald-600 focus:outline-none"

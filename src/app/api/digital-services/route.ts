@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run } from '@/lib/db';
-import { getCurrentUser, checkPermission } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const categoryId = searchParams.get('categoryId');
+    const contractType = searchParams.get('contractType');
     const status = searchParams.get('status');
     const search = searchParams.get('search') || '';
 
@@ -16,7 +17,11 @@ export async function GET(req: NextRequest) {
         lc.name as category_name,
         d_resp.name as responsible_department_name,
         d_chg.name as charged_department_name,
-        CAST((julianday(s.expiration_date) - julianday('now')) AS INTEGER) as days_until_expiration
+        CASE 
+          WHEN s.expiration_date IS NOT NULL AND s.expiration_date != ''
+          THEN CAST((julianday(s.expiration_date) - julianday('now')) AS INTEGER)
+          ELSE NULL
+        END as days_until_expiration
       FROM digital_services s
       LEFT JOIN license_categories lc ON s.category_id = lc.id
       LEFT JOIN departments d_resp ON s.responsible_department_id = d_resp.id
@@ -26,14 +31,19 @@ export async function GET(req: NextRequest) {
 
     const params: any[] = [];
     if (search.trim()) {
-      sql += ` AND (s.name LIKE ? OR s.provider LIKE ? OR s.notes LIKE ? OR s.assigned_users_text LIKE ?)`;
+      sql += ` AND (s.name LIKE ? OR s.provider LIKE ? OR s.contract_number LIKE ? OR s.contact_name LIKE ? OR s.notes LIKE ? OR s.assigned_users_text LIKE ?)`;
       const term = `%${search.trim()}%`;
-      params.push(term, term, term, term);
+      params.push(term, term, term, term, term, term);
     }
 
     if (categoryId) {
       sql += ` AND s.category_id = ?`;
       params.push(categoryId);
+    }
+
+    if (contractType) {
+      sql += ` AND s.contract_type = ?`;
+      params.push(contractType);
     }
 
     if (status) {
@@ -45,7 +55,7 @@ export async function GET(req: NextRequest) {
 
     const services = await query(sql, params);
 
-    // Listar categorías de licencias
+    // Listar categorías de licencias y contratos
     const categories = await query(`
       SELECT lc.*, 
         (SELECT COUNT(*) FROM digital_services ds WHERE ds.category_id = lc.id) as services_count,
@@ -66,7 +76,7 @@ export async function GET(req: NextRequest) {
       departments,
     });
   } catch (error: any) {
-    console.error('Error al consultar servicios digitales:', error);
+    console.error('Error al consultar servicios digitales y contratos:', error);
     return NextResponse.json({ error: 'Error al consultar servicios.' }, { status: 500 });
   }
 }
@@ -81,7 +91,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { action, categoryName, categoryDescription } = body;
 
-    // Crear nueva categoría de licencias dinámicamente (Tuerca de configuración)
+    // Crear nueva categoría de licencias o contratos dinámicamente
     if (action === 'CREATE_CATEGORY') {
       if (!categoryName || !categoryName.trim()) {
         return NextResponse.json({ error: 'El nombre de la categoría es obligatorio.' }, { status: 400 });
@@ -101,7 +111,7 @@ export async function POST(req: NextRequest) {
         module: 'SERVICIOS_DIGITALES',
         entityId: catId,
         entityName: categoryName.trim(),
-        reason: 'Creación de categoría para licencias y dominios',
+        reason: 'Creación de categoría para licencias, dominios o contratos de proveedores',
       });
 
       return NextResponse.json({ success: true, categoryId: catId });
@@ -111,6 +121,12 @@ export async function POST(req: NextRequest) {
       name,
       categoryId,
       provider,
+      contractNumber,
+      contractType = 'LICENCIA_SAAS', // 'LICENCIA_SAAS', 'CONTRATO_PROVEEDOR', 'ENLACE_INTERNET', 'ARRENDAMIENTO_EQUIPO', 'SOPORTE_MANTENIMIENTO', 'DOMINIO_HOSTING'
+      contactName,
+      contactPhone,
+      contactEmail,
+      slaTerms,
       responsibleDepartmentId,
       chargedDepartmentId,
       planType,
@@ -149,14 +165,19 @@ export async function POST(req: NextRequest) {
 
     await run(`
       INSERT INTO digital_services (
-        id, name, category_id, provider, responsible_department_id, charged_department_id,
+        id, name, category_id, provider, contract_number, contract_type,
+        contact_name, contact_phone, contact_email, sla_terms,
+        responsible_department_id, charged_department_id,
         plan_type, license_type, seats_contracted, seats_used, cost_period,
         amount, monthly_equivalent_cost, currency, start_date, expiration_date, renewal_date,
         auto_renew, status, payment_method_ref, invoice_number, warranty_document_url, invoice_document_url,
         assigned_users_text, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-      id, name.trim(), categoryId || null, provider.trim(), responsibleDepartmentId || null, chargedDepartmentId || null,
+      id, name.trim(), categoryId || null, provider.trim(),
+      contractNumber?.trim() || null, contractType || 'LICENCIA_SAAS',
+      contactName?.trim() || null, contactPhone?.trim() || null, contactEmail?.trim() || null, slaTerms?.trim() || null,
+      responsibleDepartmentId || null, chargedDepartmentId || null,
       planType?.trim() || null, licenseType, parseInt(seatsContracted, 10) || 1, parseInt(seatsUsed, 10) || 1,
       costPeriod, costPeriod === 'GRATUITO' ? 0 : numAmount, monthlyEquivalent, currency,
       startDate || null, expirationDate || null, renewalDate || expirationDate || null,
@@ -169,16 +190,16 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       username: user.username,
       userRole: user.role,
-      action: 'CREAR_SERVICIO_DIGITAL',
+      action: 'CREAR_SERVICIO_CONTRATO',
       module: 'SERVICIOS_DIGITALES',
       entityId: id,
-      entityName: name,
-      reason: `Alta de servicio digital (${currency} ${numAmount})`,
+      entityName: `${name} (${provider})`,
+      reason: `Alta de ${contractType} con proveedor ${provider} (${currency} ${numAmount})`,
     });
 
     return NextResponse.json({ success: true, id });
   } catch (error: any) {
-    console.error('Error al registrar servicio digital:', error);
+    console.error('Error al registrar servicio digital o contrato:', error);
     return NextResponse.json({ error: error.message || 'Error al registrar servicio.' }, { status: 500 });
   }
 }
@@ -194,6 +215,12 @@ export async function PUT(req: NextRequest) {
       name,
       categoryId,
       provider,
+      contractNumber,
+      contractType,
+      contactName,
+      contactPhone,
+      contactEmail,
+      slaTerms,
       responsibleDepartmentId,
       chargedDepartmentId,
       planType,
@@ -213,16 +240,26 @@ export async function PUT(req: NextRequest) {
 
     if (!id) return NextResponse.json({ error: 'ID requerido' }, { status: 400 });
 
-    const numAmount = amount ? parseFloat(amount) : 0;
+    const current = await queryOne<any>(`SELECT * FROM digital_services WHERE id = ?`, [id]);
+    if (!current) return NextResponse.json({ error: 'Registro no encontrado' }, { status: 404 });
+
+    const numAmount = amount !== undefined ? (parseFloat(amount) || 0) : current.amount;
+    const effPeriod = costPeriod || current.cost_period;
     let monthlyEquivalent = 0;
-    if (costPeriod === 'MENSUAL') monthlyEquivalent = numAmount;
-    else if (costPeriod === 'ANUAL') monthlyEquivalent = Math.round((numAmount / 12) * 100) / 100;
+    if (effPeriod === 'MENSUAL') monthlyEquivalent = numAmount;
+    else if (effPeriod === 'ANUAL') monthlyEquivalent = Math.round((numAmount / 12) * 100) / 100;
 
     await run(`
       UPDATE digital_services SET
         name = ?,
         category_id = ?,
         provider = ?,
+        contract_number = ?,
+        contract_type = ?,
+        contact_name = ?,
+        contact_phone = ?,
+        contact_email = ?,
+        sla_terms = ?,
         responsible_department_id = ?,
         charged_department_id = ?,
         plan_type = ?,
@@ -242,11 +279,31 @@ export async function PUT(req: NextRequest) {
         updated_at = CURRENT_TIMESTAMP
        WHERE id = ?
     `, [
-      name, categoryId || null, provider, responsibleDepartmentId || null, chargedDepartmentId || null,
-      planType || null, parseInt(seatsContracted, 10) || 1, parseInt(seatsUsed, 10) || 1,
-      costPeriod, numAmount, monthlyEquivalent, currency || 'GTQ',
-      startDate || null, expirationDate || null, renewalDate || null,
-      autoRenew, status, assignedUsersText || null, notes || null,
+      name || current.name,
+      categoryId !== undefined ? (categoryId || null) : current.category_id,
+      provider || current.provider,
+      contractNumber !== undefined ? (contractNumber?.trim() || null) : current.contract_number,
+      contractType || current.contract_type || 'LICENCIA_SAAS',
+      contactName !== undefined ? (contactName?.trim() || null) : current.contact_name,
+      contactPhone !== undefined ? (contactPhone?.trim() || null) : current.contact_phone,
+      contactEmail !== undefined ? (contactEmail?.trim() || null) : current.contact_email,
+      slaTerms !== undefined ? (slaTerms?.trim() || null) : current.sla_terms,
+      responsibleDepartmentId !== undefined ? (responsibleDepartmentId || null) : current.responsible_department_id,
+      chargedDepartmentId !== undefined ? (chargedDepartmentId || null) : current.charged_department_id,
+      planType !== undefined ? (planType || null) : current.plan_type,
+      seatsContracted !== undefined ? (parseInt(seatsContracted, 10) || 1) : current.seats_contracted,
+      seatsUsed !== undefined ? (parseInt(seatsUsed, 10) || 1) : current.seats_used,
+      effPeriod,
+      numAmount,
+      monthlyEquivalent,
+      currency || current.currency || 'GTQ',
+      startDate !== undefined ? (startDate || null) : current.start_date,
+      expirationDate !== undefined ? (expirationDate || null) : current.expiration_date,
+      renewalDate !== undefined ? (renewalDate || null) : current.renewal_date,
+      autoRenew || current.auto_renew,
+      status || current.status,
+      assignedUsersText !== undefined ? (assignedUsersText || null) : current.assigned_users_text,
+      notes !== undefined ? (notes || null) : current.notes,
       id
     ]);
 
@@ -257,13 +314,47 @@ export async function PUT(req: NextRequest) {
       action: 'MODIFICAR_SERVICIO_DIGITAL',
       module: 'SERVICIOS_DIGITALES',
       entityId: id,
-      entityName: name,
-      reason: 'Actualización de servicio digital o licencias',
+      entityName: name || current.name,
+      reason: 'Actualización de contrato con proveedor, servicio digital o licencias',
     });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error('Error al actualizar servicio:', error);
     return NextResponse.json({ error: error.message || 'Error al actualizar.' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const user = await getCurrentUser();
+    if (!user || (user.role !== 'ADMIN' && user.role !== 'SUBADMIN')) {
+      return NextResponse.json({ error: 'No autorizado para eliminar contratos o licencias.' }, { status: 403 });
+    }
+
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
+    if (!id) return NextResponse.json({ error: 'ID requerido' }, { status: 400 });
+
+    const current = await queryOne<any>(`SELECT * FROM digital_services WHERE id = ?`, [id]);
+    if (!current) return NextResponse.json({ error: 'Servicio no encontrado' }, { status: 404 });
+
+    await run(`DELETE FROM digital_services WHERE id = ?`, [id]);
+
+    await logAudit({
+      userId: user.id,
+      username: user.username,
+      userRole: user.role,
+      action: 'ELIMINAR_SERVICIO_DIGITAL',
+      module: 'SERVICIOS_DIGITALES',
+      entityId: id,
+      entityName: `${current.name} (${current.provider})`,
+      reason: 'Eliminación de contrato o licencia digital',
+    });
+
+    return NextResponse.json({ success: true, message: 'Registro eliminado correctamente.' });
+  } catch (error: any) {
+    console.error('Error al eliminar servicio:', error);
+    return NextResponse.json({ error: 'Error al eliminar servicio.' }, { status: 500 });
   }
 }

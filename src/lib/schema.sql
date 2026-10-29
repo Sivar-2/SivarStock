@@ -6,23 +6,17 @@
 
 PRAGMA foreign_keys = ON;
 
--- ----------------------------------------------------------------------------
--- 1. ÁREAS Y DEPARTAMENTOS DE LA EMPRESA
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS departments (
   id TEXT PRIMARY KEY,
   code TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
   cost_center TEXT,
   manager_name TEXT,
-  is_bodega INTEGER DEFAULT 0, -- 1 para "Cuarto de Servidores (Bodega)"
+  is_bodega INTEGER DEFAULT 0,
   is_active INTEGER DEFAULT 1,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 1.1 UBICACIONES FÍSICAS DENTRO DE DEPARTAMENTOS
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS locations (
   id TEXT PRIMARY KEY,
   department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
@@ -33,12 +27,9 @@ CREATE TABLE IF NOT EXISTS locations (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 2. EMPLEADOS / PERSONAL DE LA EMPRESA
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS employees (
   id TEXT PRIMARY KEY,
-  employee_code TEXT UNIQUE NOT NULL, -- Código único de empleado ej. EMP-IT-001
+  employee_code TEXT UNIQUE NOT NULL,
   full_name TEXT NOT NULL,
   initials TEXT NOT NULL,
   email TEXT,
@@ -53,9 +44,6 @@ CREATE TABLE IF NOT EXISTS employees (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 3. USUARIOS Y PERMISOS DEL SISTEMA
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
@@ -66,9 +54,8 @@ CREATE TABLE IF NOT EXISTS users (
   department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
   initials TEXT NOT NULL,
-  -- Permisos Granulares Poka-Yoke
   allowed_tabs_json TEXT DEFAULT '["DASHBOARD","INVENTARIO","CELULARES","PRODUCTOS","MOVIMIENTOS","ASIGNACIONES","MANTENIMIENTO","SERVICIOS","COSTOS","REPORTES","DEPARTAMENTOS","CONFIGURACION"]',
-  only_own_department INTEGER DEFAULT 0, -- 1 si solo puede ver datos de su departamento
+  only_own_department INTEGER DEFAULT 0,
   can_view_financials INTEGER DEFAULT 1,
   can_export INTEGER DEFAULT 1,
   can_manage_users INTEGER DEFAULT 0,
@@ -77,9 +64,6 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 4. CATEGORÍAS DE PRODUCTOS
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY,
   code TEXT UNIQUE NOT NULL,
@@ -91,9 +75,6 @@ CREATE TABLE IF NOT EXISTS categories (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 5. CATÁLOGO DE PRODUCTOS / ARTÍCULOS
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
   category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
@@ -107,8 +88,8 @@ CREATE TABLE IF NOT EXISTS products (
   current_stock REAL DEFAULT 0,
   min_stock REAL DEFAULT 5,
   target_stock REAL DEFAULT 20,
-  unit_price REAL DEFAULT 0, -- Precio unitario
-  box_price REAL DEFAULT 0,  -- Precio por caja
+  unit_price REAL DEFAULT 0,
+  box_price REAL DEFAULT 0,
   units_per_box REAL DEFAULT 1,
   default_supplier TEXT,
   is_consumable INTEGER DEFAULT 0,
@@ -116,7 +97,6 @@ CREATE TABLE IF NOT EXISTS products (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- Proveedores habituales por producto (soporta múltiples proveedores)
 CREATE TABLE IF NOT EXISTS product_suppliers (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -126,7 +106,6 @@ CREATE TABLE IF NOT EXISTS product_suppliers (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- Historial de precios de compra de productos
 CREATE TABLE IF NOT EXISTS product_price_history (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -140,14 +119,16 @@ CREATE TABLE IF NOT EXISTS product_price_history (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 6. ACTIVOS FÍSICOS INDIVIDUALES CON IDENTIFICADOR PERMANENTE (SIV-{DEPT}-{SEQ:6})
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS inventory_items (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
   permanent_code TEXT UNIQUE NOT NULL,
   serial_number TEXT,
+  mac_address TEXT,
+  imei TEXT,
+  ip_address TEXT,
+  hostname TEXT,
+  specifications TEXT,
   brand TEXT,
   model TEXT,
   current_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
@@ -171,34 +152,38 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   photo_url TEXT,
   is_broken INTEGER DEFAULT 0,
   broken_notes TEXT,
-  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL, -- Evento child
+  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
   registered_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 7. PESTAÑA DEDICADA DE CELULARES (LÍNEAS Y DISPOSITIVOS MÓVILES)
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mobile_devices (
   id TEXT PRIMARY KEY,
-  device_code TEXT UNIQUE NOT NULL, -- ej. CEL-001
+  device_code TEXT UNIQUE NOT NULL,
   brand TEXT NOT NULL,
   model TEXT NOT NULL,
+  serial_number TEXT,
+  mac_address TEXT,
   employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
   department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   phone_number TEXT NOT NULL,
   imei TEXT UNIQUE NOT NULL,
+  sim_iccid TEXT,
+  carrier TEXT DEFAULT 'Tigo',
+  plan_name TEXT,
+  monthly_cost REAL DEFAULT 0,
+  contract_number TEXT,
+  contract_start_date TEXT,
+  contract_end_date TEXT,
+  renewal_alert_days INTEGER DEFAULT 30,
   delivery_date TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'ASIGNADO' CHECK(status IN ('ASIGNADO', 'DISPONIBLE', 'DEVOLUCION_PENDIENTE', 'EN_REPARACION', 'DADO_DE_BAJA')),
-  notes_history TEXT DEFAULT '[]', -- JSON con array [{ id, date, note, author }]
+  notes_history TEXT DEFAULT '[]',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 7.1 INVENTARIO POR VOLUMEN / CONSUMIBLES
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS consumable_stocks (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
@@ -211,9 +196,6 @@ CREATE TABLE IF NOT EXISTS consumable_stocks (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 8. ASIGNACIONES A EMPLEADOS CON CÓDIGOS DE ENTREGA (AM-2026-LAPD-001)
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY,
   assignment_code TEXT UNIQUE NOT NULL,
@@ -236,9 +218,6 @@ CREATE TABLE IF NOT EXISTS assignments (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 9. ENTRADAS, SALIDAS Y MOVIMIENTOS (KARDEX AUDITABLE)
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS inventory_movements (
   id TEXT PRIMARY KEY,
   movement_type TEXT NOT NULL CHECK(movement_type IN ('RECEPCION', 'COMPRA', 'ENTRADA', 'ASIGNACION', 'TRANSFERENCIA', 'CONSUMO', 'DEVOLUCION', 'AJUSTE_AUTORIZADO', 'REPARACION', 'BAJA', 'PERDIDA')),
@@ -255,13 +234,27 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
   to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   reason TEXT NOT NULL,
   reference_code TEXT,
-  user_id TEXT REFERENCES users(id) ON DELETE SET NULL, -- Quién realizó la operación
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 10. AVERÍAS Y MANTENIMIENTO (IMPRESORAS, COMPUTADORAS, EQUIPOS)
--- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS inventory_counts (
+  id TEXT PRIMARY KEY,
+  count_code TEXT UNIQUE NOT NULL,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  executed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  executed_by_name TEXT,
+  total_expected REAL DEFAULT 0,
+  total_counted REAL DEFAULT 0,
+  total_bodega REAL DEFAULT 0,
+  total_assigned_employees REAL DEFAULT 0,
+  discrepancies_count INTEGER DEFAULT 0,
+  details_json TEXT DEFAULT '[]',
+  notes TEXT,
+  status TEXT DEFAULT 'COMPLETADO',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS maintenance_records (
   id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
@@ -276,17 +269,14 @@ CREATE TABLE IF NOT EXISTS maintenance_records (
   charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'REPORTADA' CHECK(status IN ('REPORTADA', 'AGENDADA', 'EN_DIAGNOSTICO', 'EN_REPARACION', 'REPARADO', 'IRREPARABLE_REEMPLAZO', 'DADO_DE_BAJA')),
   solution_type TEXT CHECK(solution_type IN ('REPARACION_INTERNA', 'REPARACION_PROVEEDOR', 'COMPRA_REEMPLAZO', 'BAJA_SIN_REEMPLAZO') OR solution_type IS NULL),
-  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL, -- Evento child
+  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
   replacement_reason TEXT,
-  updates_json TEXT DEFAULT '[]', -- Array JSON [{ date, note, author, status }]
+  updates_json TEXT DEFAULT '[]',
   resolved_date TEXT,
   resolution_notes TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 11. CATEGORÍAS Y SERVICIOS DIGITALES (LICENCIAS, DOMINIOS, SAAS)
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS license_categories (
   id TEXT PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
@@ -301,6 +291,12 @@ CREATE TABLE IF NOT EXISTS digital_services (
   category_id TEXT REFERENCES license_categories(id) ON DELETE SET NULL,
   category_legacy TEXT,
   provider TEXT NOT NULL,
+  contract_number TEXT,
+  contract_type TEXT DEFAULT 'LICENCIA_SAAS',
+  contact_name TEXT,
+  contact_phone TEXT,
+  contact_email TEXT,
+  sla_terms TEXT,
   responsible_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
   plan_type TEXT,
@@ -326,9 +322,6 @@ CREATE TABLE IF NOT EXISTS digital_services (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 12. REGISTROS DE COSTOS Y GASTOS (CONEXIÓN CON FACTURAS Y GARANTÍAS)
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS cost_records (
   id TEXT PRIMARY KEY,
   item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
@@ -337,7 +330,7 @@ CREATE TABLE IF NOT EXISTS cost_records (
   cost_nature TEXT NOT NULL CHECK(cost_nature IN ('ADQUISICION', 'ADICIONAL_FLETE_INSTALACION', 'REPOSICION_ESTIMADA', 'MANTENIMIENTO', 'LICENCIA_SUSCRIPCION', 'OPERATIVO')),
   concept TEXT NOT NULL,
   amount REAL NOT NULL,
-  tax_amount REAL DEFAULT 0, -- IVA 12%
+  tax_amount REAL DEFAULT 0,
   discount_amount REAL DEFAULT 0,
   total_amount REAL NOT NULL,
   currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),
@@ -360,9 +353,6 @@ CREATE TABLE IF NOT EXISTS cost_records (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 13. REPORTES PERSONALIZADOS GUARDADOS
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS custom_reports (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -374,16 +364,13 @@ CREATE TABLE IF NOT EXISTS custom_reports (
   sort_by TEXT,
   sort_direction TEXT DEFAULT 'DESC',
   visualization_type TEXT DEFAULT 'TABLE',
-  date_range_preset TEXT DEFAULT 'ALL', -- 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'ALL'
+  date_range_preset TEXT DEFAULT 'ALL',
   allowed_roles_json TEXT DEFAULT '["ADMIN","SUBADMIN","AREA_MANAGER","VIEWER"]',
   created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 14. AUDITORÍA INMUTABLE DEL SISTEMA (SOLO ADMINISTRADOR)
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -400,38 +387,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- ----------------------------------------------------------------------------
--- 15. CONFIGURACIONES GENERALES DEL SISTEMA
--- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS system_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   description TEXT,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
-
--- Índices de Rendimiento
-CREATE INDEX IF NOT EXISTS idx_items_permanent_code ON inventory_items(permanent_code);
-CREATE INDEX IF NOT EXISTS idx_items_dept ON inventory_items(current_department_id);
-CREATE INDEX IF NOT EXISTS idx_items_status ON inventory_items(operational_status);
-CREATE INDEX IF NOT EXISTS idx_celulares_imei ON mobile_devices(imei);
-CREATE INDEX IF NOT EXISTS idx_celulares_emp ON mobile_devices(employee_id);
-CREATE INDEX IF NOT EXISTS idx_assignments_code ON assignments(assignment_code);
-CREATE INDEX IF NOT EXISTS idx_employees_code ON employees(employee_code);
-CREATE INDEX IF NOT EXISTS idx_movements_date ON inventory_movements(created_at);
-CREATE INDEX IF NOT EXISTS idx_costs_date ON cost_records(expense_date);
-CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_logs(created_at);
-
--- Inmutabilidad en SQLite: Prohibir DELETE y UPDATE sobre audit_logs
-CREATE TRIGGER IF NOT EXISTS trg_audit_immutable_del
-BEFORE DELETE ON audit_logs
-BEGIN
-  SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (DELETE prohibido)');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_audit_immutable_upd
-BEFORE UPDATE ON audit_logs
-BEGIN
-  SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (UPDATE prohibido)');
-END;
-

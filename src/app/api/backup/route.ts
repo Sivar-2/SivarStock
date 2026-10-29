@@ -1,22 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { getCurrentUser, checkPermission } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/auth';
 import { saveDb, query, run, transaction, getDatabaseEngine } from '@/lib/db';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    if (!user || user.role !== 'ADMIN' || user.email !== 'alexander7tm@gmail.com') {
-      return NextResponse.json({ error: 'Solo el administrador principal (alexander7tm@gmail.com) puede descargar copias de seguridad.' }, { status: 403 });
+    if (!user || user.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Solo los usuarios Administradores (ADMIN) pueden descargar copias de seguridad.' }, { status: 403 });
     }
 
     const { searchParams } = new URL(req.url);
     const engine = getDatabaseEngine();
-    let format = searchParams.get('format') || (engine === 'POSTGRESQL' ? 'json' : 'sqlite');
+    const format = searchParams.get('format') || (engine === 'POSTGRESQL' ? 'json' : 'sqlite');
 
-    // En PostgreSQL, el volcado estructurado JSON es el formato de respaldo portátil universal
     if (format === 'json' || engine === 'POSTGRESQL') {
       const departments = await query('SELECT * FROM departments');
       const locations = await query('SELECT * FROM locations');
@@ -30,14 +29,16 @@ export async function GET(req: NextRequest) {
       const mobile_devices = await query('SELECT * FROM mobile_devices');
       const consumable_stocks = await query('SELECT * FROM consumable_stocks');
       const assignments = await query('SELECT * FROM assignments');
+      const delivery_actas = await query('SELECT * FROM delivery_actas').catch(() => []);
       const inventory_movements = await query('SELECT * FROM inventory_movements');
+      const inventory_counts = await query('SELECT * FROM inventory_counts').catch(() => []);
       const maintenance_records = await query('SELECT * FROM maintenance_records');
       const digital_services = await query('SELECT * FROM digital_services');
       const cost_records = await query('SELECT * FROM cost_records');
 
       const fullBackup = {
         app: 'SivarStock Enterprise GT',
-        version: '2.5.0',
+        version: '3.1.0',
         engine,
         exported_at: new Date().toISOString(),
         exported_by: user.email,
@@ -54,7 +55,9 @@ export async function GET(req: NextRequest) {
           mobile_devices,
           consumable_stocks,
           assignments,
+          delivery_actas,
           inventory_movements,
+          inventory_counts,
           maintenance_records,
           digital_services,
           cost_records,
@@ -117,7 +120,7 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * Restaurar copia de seguridad desde archivo JSON
+ * Restaurar copia de seguridad desde archivo JSON o purgar datos de prueba
  */
 export async function POST(req: NextRequest) {
   try {
@@ -128,22 +131,21 @@ export async function POST(req: NextRequest) {
 
     const backupData = await req.json();
 
-    // Acción para vaciar datos de prueba e iniciar inventario de cero
     if (backupData && backupData.action === 'PURGE_ALL_DATA') {
       const engine = getDatabaseEngine();
 
       await transaction(async () => {
-        // En SQLite, deshabilitar triggers de inmutabilidad si existen
         if (engine === 'SQLITE') {
           await run('DROP TRIGGER IF EXISTS trg_audit_immutable_del').catch(() => {});
           await run('DROP TRIGGER IF EXISTS trg_audit_immutable_upd').catch(() => {});
         }
 
-        // 1. Limpiar bitácoras y registros dependientes respetando integridad referencial
         await run('DELETE FROM audit_logs');
         await run('DELETE FROM cost_records');
         await run('DELETE FROM digital_services');
         await run('DELETE FROM maintenance_records');
+        await run('DELETE FROM delivery_actas').catch(() => {});
+        await run('DELETE FROM inventory_counts').catch(() => {});
         await run('DELETE FROM inventory_movements');
         await run('DELETE FROM assignments');
         await run('DELETE FROM consumable_stocks');
@@ -153,16 +155,10 @@ export async function POST(req: NextRequest) {
         await run('DELETE FROM inventory_items');
         await run('DELETE FROM products');
         
-        // Desvincular employee_id de users antes de borrar employees
         await run('UPDATE users SET employee_id = NULL');
-        
-        // Conservar únicamente el usuario ADMIN actual
         await run('DELETE FROM users WHERE id != ?', [user.id]);
-        
-        // Eliminar empleados de prueba
         await run('DELETE FROM employees');
 
-        // Recrear triggers en SQLite si aplica
         if (engine === 'SQLITE') {
           await run(`
             CREATE TRIGGER IF NOT EXISTS trg_audit_immutable_del
@@ -181,7 +177,6 @@ export async function POST(req: NextRequest) {
         }
       });
 
-      // Registrar el evento inaugural en audit_logs
       await logAudit({
         userId: user.id,
         username: user.username,
@@ -206,7 +201,6 @@ export async function POST(req: NextRequest) {
     const { data } = backupData;
 
     await transaction(async () => {
-      // 1. Departamentos
       if (Array.isArray(data.departments)) {
         for (const d of data.departments) {
           await run(
@@ -220,7 +214,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 2. Categorías
       if (Array.isArray(data.categories)) {
         for (const c of data.categories) {
           await run(
@@ -234,7 +227,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 3. Productos
       if (Array.isArray(data.products)) {
         for (const p of data.products) {
           await run(
@@ -259,40 +251,41 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 4. Empleados
       if (Array.isArray(data.employees)) {
         for (const e of data.employees) {
           await run(
             `INSERT INTO employees (
-              id, employee_code, full_name, initials, email, phone, department_id,
+              id, employee_code, full_name, dpi, job_title, initials, email, phone, department_id,
               immediate_supervisor_id, company_name, status, exit_date, exit_reason, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
-              employee_code = excluded.employee_code, full_name = excluded.full_name, initials = excluded.initials,
+              employee_code = excluded.employee_code, full_name = excluded.full_name,
+              dpi = excluded.dpi, job_title = excluded.job_title, initials = excluded.initials,
               email = excluded.email, phone = excluded.phone, department_id = excluded.department_id,
               immediate_supervisor_id = excluded.immediate_supervisor_id, company_name = excluded.company_name,
               status = excluded.status, exit_date = excluded.exit_date, exit_reason = excluded.exit_reason, notes = excluded.notes`,
             [
-              e.id, e.employee_code, e.full_name, e.initials, e.email, e.phone, e.department_id,
-              e.immediate_supervisor_id, e.company_name, e.status, e.exit_date, e.exit_reason, e.notes
+              e.id, e.employee_code, e.full_name, e.dpi || null, e.job_title || null, e.initials, e.email, e.phone, e.department_id,
+              e.immediate_supervisor_id || null, e.company_name, e.status, e.exit_date, e.exit_reason, e.notes
             ]
           );
         }
       }
 
-      // 5. Activos de Inventario
       if (Array.isArray(data.inventory_items)) {
         for (const it of data.inventory_items) {
           await run(
             `INSERT INTO inventory_items (
-              id, product_id, permanent_code, serial_number, brand, model,
-              current_department_id, current_employee_id, current_assigned_user_id,
+              id, product_id, permanent_code, serial_number, mac_address, imei, ip_address, hostname, specifications,
+              brand, model, current_department_id, current_employee_id, current_assigned_user_id,
               operational_status, physical_condition, purchase_date, supplier,
               purchase_price, replacement_value, residual_value, currency, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
               product_id = excluded.product_id, permanent_code = excluded.permanent_code,
-              serial_number = excluded.serial_number, brand = excluded.brand, model = excluded.model,
+              serial_number = excluded.serial_number, mac_address = excluded.mac_address, imei = excluded.imei,
+              ip_address = excluded.ip_address, hostname = excluded.hostname, specifications = excluded.specifications,
+              brand = excluded.brand, model = excluded.model,
               current_department_id = excluded.current_department_id, current_employee_id = excluded.current_employee_id,
               current_assigned_user_id = excluded.current_assigned_user_id, operational_status = excluded.operational_status,
               physical_condition = excluded.physical_condition, purchase_date = excluded.purchase_date,
@@ -300,8 +293,9 @@ export async function POST(req: NextRequest) {
               replacement_value = excluded.replacement_value, residual_value = excluded.residual_value,
               currency = excluded.currency, notes = excluded.notes`,
             [
-              it.id, it.product_id, it.permanent_code, it.serial_number, it.brand, it.model,
-              it.current_department_id, it.current_employee_id, it.current_assigned_user_id,
+              it.id, it.product_id, it.permanent_code, it.serial_number, it.mac_address || null, it.imei || null,
+              it.ip_address || null, it.hostname || null, it.specifications || null,
+              it.brand, it.model, it.current_department_id, it.current_employee_id, it.current_assigned_user_id,
               it.operational_status, it.physical_condition, it.purchase_date, it.supplier,
               it.purchase_price, it.replacement_value, it.residual_value, it.currency || 'GTQ', it.notes
             ]
@@ -309,67 +303,54 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 6. Celulares
       if (Array.isArray(data.mobile_devices)) {
         for (const m of data.mobile_devices) {
           await run(
             `INSERT INTO mobile_devices (
-              id, device_code, brand, model, employee_id, department_id,
-              phone_number, imei, delivery_date, status, notes_history
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              id, device_code, brand, model, serial_number, mac_address, employee_id, department_id,
+              phone_number, imei, sim_iccid, carrier, plan_name, monthly_cost, contract_number,
+              contract_start_date, contract_end_date, delivery_date, status, notes_history
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
               device_code = excluded.device_code, brand = excluded.brand, model = excluded.model,
+              serial_number = excluded.serial_number, mac_address = excluded.mac_address,
               employee_id = excluded.employee_id, department_id = excluded.department_id,
-              phone_number = excluded.phone_number, imei = excluded.imei, delivery_date = excluded.delivery_date,
+              phone_number = excluded.phone_number, imei = excluded.imei, sim_iccid = excluded.sim_iccid,
+              carrier = excluded.carrier, plan_name = excluded.plan_name, monthly_cost = excluded.monthly_cost,
+              contract_number = excluded.contract_number, contract_start_date = excluded.contract_start_date,
+              contract_end_date = excluded.contract_end_date, delivery_date = excluded.delivery_date,
               status = excluded.status, notes_history = excluded.notes_history`,
             [
-              m.id, m.device_code, m.brand, m.model, m.employee_id, m.department_id,
-              m.phone_number, m.imei, m.delivery_date, m.status, m.notes_history || '[]'
+              m.id, m.device_code, m.brand, m.model, m.serial_number || null, m.mac_address || null,
+              m.employee_id, m.department_id, m.phone_number, m.imei, m.sim_iccid || null,
+              m.carrier || 'Tigo', m.plan_name || null, m.monthly_cost || 0, m.contract_number || null,
+              m.contract_start_date || null, m.contract_end_date || null, m.delivery_date, m.status, m.notes_history || '[]'
             ]
           );
         }
       }
 
-      // 7. Consumibles
-      if (Array.isArray(data.consumable_stocks)) {
-        for (const cs of data.consumable_stocks) {
+      if (Array.isArray(data.delivery_actas)) {
+        for (const da of data.delivery_actas) {
           await run(
-            `INSERT INTO consumable_stocks (
-              id, product_id, department_id, quantity, batch_number, unit_cost, expiration_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO delivery_actas (
+              id, acta_code, acta_type, employee_id, employee_name, employee_dpi, employee_code,
+              department_name, supervisor_name, issuer_name, issuer_role, issuer_signature_data,
+              receive_condition, delivery_date, devices_snapshot_json, replaced_device_json,
+              notes, status, employee_signature_data, signed_at, signed_ip, legal_notice
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
-              product_id = excluded.product_id, department_id = excluded.department_id,
-              quantity = excluded.quantity, batch_number = excluded.batch_number,
-              unit_cost = excluded.unit_cost, expiration_date = excluded.expiration_date`,
-            [cs.id, cs.product_id, cs.department_id, cs.quantity, cs.batch_number, cs.unit_cost, cs.expiration_date]
-          );
-        }
-      }
-
-      // 8. Asignaciones
-      if (Array.isArray(data.assignments)) {
-        for (const a of data.assignments) {
-          await run(
-            `INSERT INTO assignments (
-              id, assignment_code, item_id, product_id, employee_id, user_id,
-              quantity, assigned_by_user_id, origin_department_id, target_department_id,
-              charged_department_id, assigned_at, expected_return_date, returned_at,
-              return_condition, return_notes, status, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET
-              assignment_code = excluded.assignment_code, item_id = excluded.item_id,
-              product_id = excluded.product_id, employee_id = excluded.employee_id,
-              user_id = excluded.user_id, quantity = excluded.quantity,
-              assigned_by_user_id = excluded.assigned_by_user_id, origin_department_id = excluded.origin_department_id,
-              target_department_id = excluded.target_department_id, charged_department_id = excluded.charged_department_id,
-              assigned_at = excluded.assigned_at, expected_return_date = excluded.expected_return_date,
-              returned_at = excluded.returned_at, return_condition = excluded.return_condition,
-              return_notes = excluded.return_notes, status = excluded.status, notes = excluded.notes`,
+              status = excluded.status,
+              employee_signature_data = excluded.employee_signature_data,
+              signed_at = excluded.signed_at`,
             [
-              a.id, a.assignment_code, a.item_id, a.product_id, a.employee_id, a.user_id,
-              a.quantity || 1, a.assigned_by_user_id, a.origin_department_id, a.target_department_id,
-              a.charged_department_id, a.assigned_at, a.expected_return_date, a.returned_at,
-              a.return_condition, a.return_notes, a.status, a.notes
+              da.id, da.acta_code, da.acta_type || 'ENTREGA_INICIAL', da.employee_id, da.employee_name,
+              da.employee_dpi || null, da.employee_code || null, da.department_name || null, da.supervisor_name || null,
+              da.issuer_name || 'Alexander Turcios Melendez', da.issuer_role || 'Jefe de IT / Administración de Inventario',
+              da.issuer_signature_data || null, da.receive_condition || 'NUEVO', da.delivery_date,
+              da.devices_snapshot_json || '[]', da.replaced_device_json || null, da.notes || null,
+              da.status || 'PENDIENTE_FIRMA', da.employee_signature_data || null, da.signed_at || null,
+              da.signed_ip || null, da.legal_notice || ''
             ]
           );
         }

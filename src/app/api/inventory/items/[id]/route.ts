@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run, transaction } from '@/lib/db';
-import { getCurrentUser, checkPermission, canAccessModule } from '@/lib/auth';
+import { getCurrentUser, canAccessModule } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -17,15 +17,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         d.name as department_name,
         d.code as department_code,
         loc.name as location_name,
-        u.full_name as assigned_user_name,
-        u.email as assigned_user_email,
-        u.initials as assigned_user_initials
+        COALESCE(e.full_name, u.full_name) as assigned_user_name,
+        COALESCE(e.email, u.email) as assigned_user_email,
+        COALESCE(e.initials, u.initials) as assigned_user_initials,
+        e.employee_code as assigned_employee_code,
+        e.phone as assigned_user_phone
       FROM inventory_items i
       JOIN products p ON i.product_id = p.id
       JOIN categories c ON p.category_id = c.id
       LEFT JOIN departments d ON i.current_department_id = d.id
       LEFT JOIN locations loc ON i.current_location_id = loc.id
       LEFT JOIN users u ON i.current_assigned_user_id = u.id
+      LEFT JOIN employees e ON (i.current_employee_id = e.id OR (i.current_employee_id IS NULL AND u.employee_id = e.id))
       WHERE i.id = ? OR i.permanent_code = ?
     `, [id, id]);
 
@@ -33,13 +36,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return NextResponse.json({ error: 'Activo no encontrado.' }, { status: 404 });
     }
 
-    // Historial de asignaciones de este activo
+    // Historial de asignaciones de este activo (soporta tanto empleados como usuarios)
     const assignments = await query<any>(`
-      SELECT a.*, u.full_name as user_name, u.initials as user_initials,
-             d_orig.name as origin_dept_name, d_dest.name as target_dept_name,
+      SELECT a.*,
+             COALESCE(e.full_name, u.full_name) as user_name,
+             COALESCE(e.initials, u.initials) as user_initials,
+             e.employee_code,
+             d_orig.name as origin_dept_name,
+             d_dest.name as target_dept_name,
              ass_by.full_name as assigned_by_name
       FROM assignments a
-      JOIN users u ON a.user_id = u.id
+      LEFT JOIN employees e ON a.employee_id = e.id
+      LEFT JOIN users u ON a.user_id = u.id
       LEFT JOIN users ass_by ON a.assigned_by_user_id = ass_by.id
       LEFT JOIN departments d_orig ON a.origin_department_id = d_orig.id
       LEFT JOIN departments d_dest ON a.target_department_id = d_dest.id
@@ -59,11 +67,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     // Historial de movimientos kardex
     const movements = await query<any>(`
       SELECT m.*, u.full_name as user_name,
-             d_from.name as from_dept_name, d_to.name as to_dept_name
+             d_from.name as from_dept_name, d_to.name as to_dept_name,
+             fe.full_name as from_employee_name, te.full_name as to_employee_name
       FROM inventory_movements m
       LEFT JOIN users u ON m.user_id = u.id
       LEFT JOIN departments d_from ON m.from_department_id = d_from.id
       LEFT JOIN departments d_to ON m.to_department_id = d_to.id
+      LEFT JOIN employees fe ON m.from_employee_id = fe.id
+      LEFT JOIN employees te ON m.to_employee_id = te.id
       WHERE m.item_id = ?
       ORDER BY m.created_at DESC
     `, [item.id]);
@@ -98,39 +109,70 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
     const {
       serialNumber,
+      macAddress,
+      imei,
+      ipAddress,
+      hostname,
+      specifications,
       brand,
       model,
       currentDepartmentId,
+      currentEmployeeId,
       currentLocationId,
       operationalStatus,
       physicalCondition,
       purchasePrice,
       replacementValue,
+      warrantyExpiration,
+      invoiceNumber,
       supplier,
       notes,
     } = body;
 
     await run(`
       UPDATE inventory_items
-      SET serial_number = COALESCE(?, serial_number),
-          brand = COALESCE(?, brand),
-          model = COALESCE(?, model),
-          current_department_id = COALESCE(?, current_department_id),
-          current_location_id = COALESCE(?, current_location_id),
-          operational_status = COALESCE(?, operational_status),
-          physical_condition = COALESCE(?, physical_condition),
-          purchase_price = COALESCE(?, purchase_price),
-          replacement_value = COALESCE(?, replacement_value),
-          supplier = COALESCE(?, supplier),
-          notes = COALESCE(?, notes),
+      SET serial_number = ?,
+          mac_address = ?,
+          imei = ?,
+          ip_address = ?,
+          hostname = ?,
+          specifications = ?,
+          brand = ?,
+          model = ?,
+          current_department_id = ?,
+          current_employee_id = ?,
+          current_location_id = ?,
+          operational_status = ?,
+          physical_condition = ?,
+          purchase_price = ?,
+          replacement_value = ?,
+          warranty_expiration = ?,
+          invoice_number = ?,
+          supplier = ?,
+          notes = ?,
           updated_at = datetime('now')
       WHERE id = ?
     `, [
-      serialNumber, brand, model, currentDepartmentId, currentLocationId,
-      operationalStatus, physicalCondition,
-      purchasePrice !== undefined ? parseFloat(purchasePrice) : null,
-      replacementValue !== undefined ? parseFloat(replacementValue) : null,
-      supplier, notes, id
+      serialNumber !== undefined ? (serialNumber?.trim() || null) : currentItem.serial_number,
+      macAddress !== undefined ? (macAddress?.trim() || null) : currentItem.mac_address,
+      imei !== undefined ? (imei?.trim() || null) : currentItem.imei,
+      ipAddress !== undefined ? (ipAddress?.trim() || null) : currentItem.ip_address,
+      hostname !== undefined ? (hostname?.trim() || null) : currentItem.hostname,
+      specifications !== undefined ? (specifications?.trim() || null) : currentItem.specifications,
+      brand !== undefined ? (brand?.trim() || null) : currentItem.brand,
+      model !== undefined ? (model?.trim() || null) : currentItem.model,
+      currentDepartmentId !== undefined ? currentDepartmentId : currentItem.current_department_id,
+      currentEmployeeId !== undefined ? (currentEmployeeId || null) : currentItem.current_employee_id,
+      currentLocationId !== undefined ? (currentLocationId || null) : currentItem.current_location_id,
+      operationalStatus !== undefined ? operationalStatus : currentItem.operational_status,
+      physicalCondition !== undefined ? physicalCondition : currentItem.physical_condition,
+      purchasePrice !== undefined ? (purchasePrice === '' || purchasePrice === null ? null : parseFloat(purchasePrice)) : currentItem.purchase_price,
+      replacementValue !== undefined ? (replacementValue === '' || replacementValue === null ? null : parseFloat(replacementValue)) : currentItem.replacement_value,
+      warrantyExpiration !== undefined ? (warrantyExpiration || null) : currentItem.warranty_expiration,
+      invoiceNumber !== undefined ? (invoiceNumber?.trim() || null) : currentItem.invoice_number,
+      supplier !== undefined ? (supplier?.trim() || null) : currentItem.supplier,
+      notes !== undefined ? (notes?.trim() || null) : currentItem.notes,
+      id
     ]);
 
     await logAudit({
@@ -143,7 +185,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       entityName: currentItem.permanent_code,
       beforeState: currentItem,
       afterState: body,
-      reason: 'Actualización de ficha de activo',
+      reason: 'Actualización de ficha técnica y datos del activo',
     });
 
     return NextResponse.json({ success: true, message: 'Activo actualizado con éxito.' });
@@ -179,7 +221,15 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
         WHERE item_id = ? AND status = 'ACTIVA'
       `, [reason, id]);
 
-      // 2. Marcar DADO_DE_BAJA, desasignar empleado y registrar notas de baja
+      // 2. Si estaba DISPONIBLE en Bodega, descontar de current_stock del producto
+      if (item.operational_status === 'DISPONIBLE') {
+        await run(
+          `UPDATE products SET current_stock = CASE WHEN current_stock > 0 THEN current_stock - 1 ELSE 0 END WHERE id = ?`,
+          [item.product_id]
+        );
+      }
+
+      // 3. Marcar DADO_DE_BAJA, desasignar empleado y registrar notas de baja
       await run(`
         UPDATE inventory_items
         SET operational_status = 'DADO_DE_BAJA',
@@ -193,7 +243,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
         WHERE id = ?
       `, [reason, reason, id]);
 
-      // 3. Registrar movimiento de baja
+      // 4. Registrar movimiento de baja
       const movId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`;
       await run(`
         INSERT INTO inventory_movements (

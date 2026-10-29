@@ -1,1 +1,451 @@
-export const SCHEMA_SQL = "-- ============================================================================\n-- SIVARSTOCK - ESQUEMA RELACIONAL EMPRESARIAL COMPLETO\n-- Base de Datos Unificada con Soporte SQLite / PostgreSQL (Supabase)\n-- Moneda Oficial: Quetzales (GTQ - Q) con soporte secundario en Dólares (USD)\n-- ============================================================================\n\nPRAGMA foreign_keys = ON;\n\n-- ----------------------------------------------------------------------------\n-- 1. ÁREAS Y DEPARTAMENTOS DE LA EMPRESA\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS departments (\n  id TEXT PRIMARY KEY,\n  code TEXT UNIQUE NOT NULL,\n  name TEXT NOT NULL,\n  cost_center TEXT,\n  manager_name TEXT,\n  is_bodega INTEGER DEFAULT 0, -- 1 para \"Cuarto de Servidores (Bodega)\"\n  is_active INTEGER DEFAULT 1,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 1.1 UBICACIONES FÍSICAS DENTRO DE DEPARTAMENTOS\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS locations (\n  id TEXT PRIMARY KEY,\n  department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,\n  code TEXT NOT NULL,\n  name TEXT NOT NULL,\n  description TEXT,\n  is_active INTEGER DEFAULT 1,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 2. EMPLEADOS / PERSONAL DE LA EMPRESA\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS employees (\n  id TEXT PRIMARY KEY,\n  employee_code TEXT UNIQUE NOT NULL, -- Código único de empleado ej. EMP-IT-001\n  full_name TEXT NOT NULL,\n  initials TEXT NOT NULL,\n  email TEXT,\n  phone TEXT,\n  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  immediate_supervisor_id TEXT REFERENCES employees(id) ON DELETE SET NULL,\n  company_name TEXT DEFAULT 'Persiluz / SivarStock',\n  status TEXT NOT NULL DEFAULT 'ACTIVO' CHECK(status IN ('ACTIVO', 'INACTIVO', 'RETIRADO')),\n  exit_date TEXT,\n  exit_reason TEXT,\n  notes TEXT,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 3. USUARIOS Y PERMISOS DEL SISTEMA\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS users (\n  id TEXT PRIMARY KEY,\n  username TEXT UNIQUE NOT NULL,\n  full_name TEXT NOT NULL,\n  email TEXT UNIQUE NOT NULL,\n  password_hash TEXT NOT NULL,\n  role TEXT NOT NULL DEFAULT 'VIEWER' CHECK(role IN ('ADMIN', 'SUBADMIN', 'AREA_MANAGER', 'VIEWER')),\n  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,\n  initials TEXT NOT NULL,\n  -- Permisos Granulares Poka-Yoke\n  allowed_tabs_json TEXT DEFAULT '[\"DASHBOARD\",\"INVENTARIO\",\"CELULARES\",\"PRODUCTOS\",\"MOVIMIENTOS\",\"ASIGNACIONES\",\"MANTENIMIENTO\",\"SERVICIOS\",\"COSTOS\",\"REPORTES\",\"DEPARTAMENTOS\",\"CONFIGURACION\"]',\n  only_own_department INTEGER DEFAULT 0, -- 1 si solo puede ver datos de su departamento\n  can_view_financials INTEGER DEFAULT 1,\n  can_export INTEGER DEFAULT 1,\n  can_manage_users INTEGER DEFAULT 0,\n  can_edit INTEGER DEFAULT 1,\n  is_active INTEGER DEFAULT 1,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 4. CATEGORÍAS DE PRODUCTOS\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS categories (\n  id TEXT PRIMARY KEY,\n  code TEXT UNIQUE NOT NULL,\n  name TEXT NOT NULL,\n  tracking_type TEXT NOT NULL DEFAULT 'INDIVIDUAL' CHECK(tracking_type IN ('INDIVIDUAL', 'QUANTITY', 'BATCH')),\n  description TEXT,\n  icon TEXT DEFAULT 'Package',\n  is_active INTEGER DEFAULT 1,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 5. CATÁLOGO DE PRODUCTOS / ARTÍCULOS\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS products (\n  id TEXT PRIMARY KEY,\n  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,\n  code TEXT UNIQUE NOT NULL,\n  name TEXT NOT NULL,\n  description TEXT,\n  brand TEXT,\n  model TEXT,\n  image_url TEXT,\n  unit_of_measure TEXT DEFAULT 'unidad',\n  current_stock REAL DEFAULT 0,\n  min_stock REAL DEFAULT 5,\n  target_stock REAL DEFAULT 20,\n  unit_price REAL DEFAULT 0, -- Precio unitario\n  box_price REAL DEFAULT 0,  -- Precio por caja\n  units_per_box REAL DEFAULT 1,\n  default_supplier TEXT,\n  is_consumable INTEGER DEFAULT 0,\n  is_active INTEGER DEFAULT 1,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Proveedores habituales por producto (soporta múltiples proveedores)\nCREATE TABLE IF NOT EXISTS product_suppliers (\n  id TEXT PRIMARY KEY,\n  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,\n  supplier_name TEXT NOT NULL,\n  contact_info TEXT,\n  is_preferred INTEGER DEFAULT 0,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Historial de precios de compra de productos\nCREATE TABLE IF NOT EXISTS product_price_history (\n  id TEXT PRIMARY KEY,\n  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,\n  purchase_date TEXT NOT NULL,\n  unit_price REAL NOT NULL,\n  box_price REAL DEFAULT 0,\n  currency TEXT DEFAULT 'GTQ',\n  supplier_name TEXT,\n  invoice_number TEXT,\n  notes TEXT,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 6. ACTIVOS FÍSICOS INDIVIDUALES CON IDENTIFICADOR PERMANENTE (SIV-{DEPT}-{SEQ:6})\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS inventory_items (\n  id TEXT PRIMARY KEY,\n  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,\n  permanent_code TEXT UNIQUE NOT NULL,\n  serial_number TEXT,\n  brand TEXT,\n  model TEXT,\n  current_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  current_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,\n  current_assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  operational_status TEXT NOT NULL DEFAULT 'DISPONIBLE' CHECK(operational_status IN ('DISPONIBLE', 'ASIGNADO', 'RESERVADO', 'DEVOLUCION_PENDIENTE', 'EN_REVISION', 'AVERIADO', 'DADO_DE_BAJA', 'PERDIDO')),\n  physical_condition TEXT NOT NULL DEFAULT 'BUENO' CHECK(physical_condition IN ('NUEVO', 'BUENO', 'USADO', 'DANADO', 'AVERIADO', 'EN_REPARACION', 'NO_EVALUADO')),\n  purchase_date TEXT,\n  reception_date TEXT,\n  supplier TEXT,\n  purchase_price REAL,\n  replacement_value REAL,\n  residual_value REAL,\n  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),\n  warranty_expiration TEXT,\n  invoice_number TEXT,\n  purchase_order TEXT,\n  warranty_document_url TEXT,\n  invoice_document_url TEXT,\n  notes TEXT,\n  photo_url TEXT,\n  is_broken INTEGER DEFAULT 0,\n  broken_notes TEXT,\n  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL, -- Evento child\n  registered_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 7. PESTAÑA DEDICADA DE CELULARES (LÍNEAS Y DISPOSITIVOS MÓVILES)\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS mobile_devices (\n  id TEXT PRIMARY KEY,\n  device_code TEXT UNIQUE NOT NULL, -- ej. CEL-001\n  brand TEXT NOT NULL,\n  model TEXT NOT NULL,\n  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,\n  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  phone_number TEXT NOT NULL,\n  imei TEXT UNIQUE NOT NULL,\n  delivery_date TEXT NOT NULL,\n  status TEXT NOT NULL DEFAULT 'ASIGNADO' CHECK(status IN ('ASIGNADO', 'DISPONIBLE', 'DEVOLUCION_PENDIENTE', 'EN_REPARACION', 'DADO_DE_BAJA')),\n  notes_history TEXT DEFAULT '[]', -- JSON con array [{ id, date, note, author }]\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 7.1 INVENTARIO POR VOLUMEN / CONSUMIBLES\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS consumable_stocks (\n  id TEXT PRIMARY KEY,\n  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,\n  department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE RESTRICT,\n  quantity REAL NOT NULL DEFAULT 0 CHECK(quantity >= 0),\n  batch_number TEXT DEFAULT 'LOTE-GENERAL',\n  unit_cost REAL DEFAULT 0,\n  expiration_date TEXT,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 8. ASIGNACIONES A EMPLEADOS CON CÓDIGOS DE ENTREGA (AM-2026-LAPD-001)\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS assignments (\n  id TEXT PRIMARY KEY,\n  assignment_code TEXT UNIQUE NOT NULL,\n  item_id TEXT REFERENCES inventory_items(id) ON DELETE RESTRICT,\n  product_id TEXT REFERENCES products(id) ON DELETE RESTRICT,\n  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,\n  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  quantity REAL DEFAULT 1,\n  assigned_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,\n  origin_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  target_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  expected_return_date TEXT,\n  returned_at TEXT,\n  return_condition TEXT CHECK(return_condition IN ('NUEVO', 'BUENO', 'USADO', 'DANADO', 'AVERIADO', 'EN_REPARACION', 'NO_EVALUADO') OR return_condition IS NULL),\n  return_notes TEXT,\n  status TEXT NOT NULL DEFAULT 'ACTIVA' CHECK(status IN ('ACTIVA', 'DEVUELTO', 'DEVOLUCION_PENDIENTE', 'PERDIDO', 'TRANSFERIDO')),\n  notes TEXT,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 9. ENTRADAS, SALIDAS Y MOVIMIENTOS (KARDEX AUDITABLE)\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS inventory_movements (\n  id TEXT PRIMARY KEY,\n  movement_type TEXT NOT NULL CHECK(movement_type IN ('RECEPCION', 'COMPRA', 'ENTRADA', 'ASIGNACION', 'TRANSFERENCIA', 'CONSUMO', 'DEVOLUCION', 'AJUSTE_AUTORIZADO', 'REPARACION', 'BAJA', 'PERDIDA')),\n  item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,\n  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,\n  quantity REAL NOT NULL DEFAULT 1,\n  unit_cost REAL,\n  total_cost REAL,\n  from_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  to_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  from_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,\n  to_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,\n  from_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  reason TEXT NOT NULL,\n  reference_code TEXT,\n  user_id TEXT REFERENCES users(id) ON DELETE SET NULL, -- Quién realizó la operación\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 10. AVERÍAS Y MANTENIMIENTO (IMPRESORAS, COMPUTADORAS, EQUIPOS)\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS maintenance_records (\n  id TEXT PRIMARY KEY,\n  item_id TEXT NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,\n  reported_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  scheduled_date TEXT,\n  reported_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  fault_description TEXT NOT NULL,\n  severity TEXT NOT NULL DEFAULT 'MODERADA' CHECK(severity IN ('LEVE', 'MODERADA', 'CRITICA')),\n  technician_supplier TEXT,\n  repair_cost REAL DEFAULT 0,\n  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),\n  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  status TEXT NOT NULL DEFAULT 'REPORTADA' CHECK(status IN ('REPORTADA', 'AGENDADA', 'EN_DIAGNOSTICO', 'EN_REPARACION', 'REPARADO', 'IRREPARABLE_REEMPLAZO', 'DADO_DE_BAJA')),\n  solution_type TEXT CHECK(solution_type IN ('REPARACION_INTERNA', 'REPARACION_PROVEEDOR', 'COMPRA_REEMPLAZO', 'BAJA_SIN_REEMPLAZO') OR solution_type IS NULL),\n  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL, -- Evento child\n  replacement_reason TEXT,\n  updates_json TEXT DEFAULT '[]', -- Array JSON [{ date, note, author, status }]\n  resolved_date TEXT,\n  resolution_notes TEXT,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 11. CATEGORÍAS Y SERVICIOS DIGITALES (LICENCIAS, DOMINIOS, SAAS)\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS license_categories (\n  id TEXT PRIMARY KEY,\n  name TEXT UNIQUE NOT NULL,\n  description TEXT,\n  is_active INTEGER DEFAULT 1,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE TABLE IF NOT EXISTS digital_services (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  category_id TEXT REFERENCES license_categories(id) ON DELETE SET NULL,\n  category_legacy TEXT,\n  provider TEXT NOT NULL,\n  responsible_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  plan_type TEXT,\n  license_type TEXT DEFAULT 'USUARIOS',\n  seats_contracted INTEGER DEFAULT 1,\n  seats_used INTEGER DEFAULT 1,\n  cost_period TEXT NOT NULL CHECK(cost_period IN ('MENSUAL', 'ANUAL', 'UNICO', 'GRATUITO')),\n  amount REAL,\n  monthly_equivalent_cost REAL DEFAULT 0,\n  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),\n  start_date TEXT,\n  expiration_date TEXT,\n  renewal_date TEXT,\n  auto_renew TEXT DEFAULT 'SI' CHECK(auto_renew IN ('SI', 'NO', 'DESCONOCIDO')),\n  status TEXT NOT NULL DEFAULT 'ACTIVA' CHECK(status IN ('ACTIVA', 'GRATUITA', 'PAGO_UNICO', 'CADUCADA_INACTIVA', 'CANCELADA', 'PENDIENTE')),\n  payment_method_ref TEXT,\n  invoice_number TEXT,\n  warranty_document_url TEXT,\n  invoice_document_url TEXT,\n  assigned_users_text TEXT,\n  notes TEXT,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 12. REGISTROS DE COSTOS Y GASTOS (CONEXIÓN CON FACTURAS Y GARANTÍAS)\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS cost_records (\n  id TEXT PRIMARY KEY,\n  item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,\n  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,\n  digital_service_id TEXT REFERENCES digital_services(id) ON DELETE SET NULL,\n  cost_nature TEXT NOT NULL CHECK(cost_nature IN ('ADQUISICION', 'ADICIONAL_FLETE_INSTALACION', 'REPOSICION_ESTIMADA', 'MANTENIMIENTO', 'LICENCIA_SUSCRIPCION', 'OPERATIVO')),\n  concept TEXT NOT NULL,\n  amount REAL NOT NULL,\n  tax_amount REAL DEFAULT 0, -- IVA 12%\n  discount_amount REAL DEFAULT 0,\n  total_amount REAL NOT NULL,\n  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),\n  exchange_rate REAL DEFAULT 1.0,\n  expense_date TEXT NOT NULL,\n  requesting_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  originating_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  recording_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  budget_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,\n  supplier TEXT,\n  invoice_number TEXT,\n  purchase_order TEXT,\n  warranty_document_url TEXT,\n  invoice_document_url TEXT,\n  cost_center TEXT,\n  status TEXT DEFAULT 'CONFIRMADO',\n  notes TEXT,\n  recorded_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 13. REPORTES PERSONALIZADOS GUARDADOS\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS custom_reports (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  description TEXT,\n  module TEXT NOT NULL CHECK(module IN ('INVENTARIO', 'CELULARES', 'MOVIMIENTOS', 'COSTOS', 'ASIGNACIONES', 'SERVICIOS', 'MANTENIMIENTO')),\n  columns_json TEXT NOT NULL DEFAULT '[]',\n  filters_json TEXT NOT NULL DEFAULT '[]',\n  group_by TEXT,\n  sort_by TEXT,\n  sort_direction TEXT DEFAULT 'DESC',\n  visualization_type TEXT DEFAULT 'TABLE',\n  date_range_preset TEXT DEFAULT 'ALL', -- 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'ALL'\n  allowed_roles_json TEXT DEFAULT '[\"ADMIN\",\"SUBADMIN\",\"AREA_MANAGER\",\"VIEWER\"]',\n  created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 14. AUDITORÍA INMUTABLE DEL SISTEMA (SOLO ADMINISTRADOR)\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS audit_logs (\n  id TEXT PRIMARY KEY,\n  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,\n  username TEXT NOT NULL,\n  user_role TEXT NOT NULL,\n  action TEXT NOT NULL,\n  module TEXT NOT NULL,\n  entity_id TEXT,\n  entity_name TEXT,\n  before_state_json TEXT,\n  after_state_json TEXT,\n  reason TEXT,\n  ip_address TEXT,\n  created_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- ----------------------------------------------------------------------------\n-- 15. CONFIGURACIONES GENERALES DEL SISTEMA\n-- ----------------------------------------------------------------------------\nCREATE TABLE IF NOT EXISTS system_settings (\n  key TEXT PRIMARY KEY,\n  value TEXT NOT NULL,\n  description TEXT,\n  updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Índices de Rendimiento\nCREATE INDEX IF NOT EXISTS idx_items_permanent_code ON inventory_items(permanent_code);\nCREATE INDEX IF NOT EXISTS idx_items_dept ON inventory_items(current_department_id);\nCREATE INDEX IF NOT EXISTS idx_items_status ON inventory_items(operational_status);\nCREATE INDEX IF NOT EXISTS idx_celulares_imei ON mobile_devices(imei);\nCREATE INDEX IF NOT EXISTS idx_celulares_emp ON mobile_devices(employee_id);\nCREATE INDEX IF NOT EXISTS idx_assignments_code ON assignments(assignment_code);\nCREATE INDEX IF NOT EXISTS idx_employees_code ON employees(employee_code);\nCREATE INDEX IF NOT EXISTS idx_movements_date ON inventory_movements(created_at);\nCREATE INDEX IF NOT EXISTS idx_costs_date ON cost_records(expense_date);\nCREATE INDEX IF NOT EXISTS idx_audit_date ON audit_logs(created_at);\n\n-- Inmutabilidad en SQLite: Prohibir DELETE y UPDATE sobre audit_logs\nCREATE TRIGGER IF NOT EXISTS trg_audit_immutable_del\nBEFORE DELETE ON audit_logs\nBEGIN\n  SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (DELETE prohibido)');\nEND;\n\nCREATE TRIGGER IF NOT EXISTS trg_audit_immutable_upd\nBEFORE UPDATE ON audit_logs\nBEGIN\n  SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (UPDATE prohibido)');\nEND;\n\n";
+export const SCHEMA_SQL = `-- ============================================================================
+-- SIVARSTOCK - ESQUEMA RELACIONAL EMPRESARIAL COMPLETO
+-- Base de Datos Unificada con Soporte SQLite / PostgreSQL (Supabase)
+-- Moneda Oficial: Quetzales (GTQ - Q) con soporte secundario en Dólares (USD)
+-- ============================================================================
+
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS departments (
+  id TEXT PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  cost_center TEXT,
+  manager_name TEXT,
+  is_bodega INTEGER DEFAULT 0,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS locations (
+  id TEXT PRIMARY KEY,
+  department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS employees (
+  id TEXT PRIMARY KEY,
+  employee_code TEXT UNIQUE NOT NULL,
+  full_name TEXT NOT NULL,
+  dpi TEXT,
+  job_title TEXT,
+  initials TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  immediate_supervisor_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  company_name TEXT DEFAULT 'Persiluz / SivarStock',
+  status TEXT NOT NULL DEFAULT 'ACTIVO' CHECK(status IN ('ACTIVO', 'INACTIVO', 'RETIRADO')),
+  exit_date TEXT,
+  exit_reason TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  full_name TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'VIEWER' CHECK(role IN ('ADMIN', 'SUBADMIN', 'AREA_MANAGER', 'VIEWER')),
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  initials TEXT NOT NULL,
+  allowed_tabs_json TEXT DEFAULT '["DASHBOARD","INVENTARIO","CELULARES","PRODUCTOS","MOVIMIENTOS","ASIGNACIONES","MANTENIMIENTO","SERVICIOS","COSTOS","REPORTES","DEPARTAMENTOS","CONFIGURACION"]',
+  only_own_department INTEGER DEFAULT 0,
+  can_view_financials INTEGER DEFAULT 1,
+  can_export INTEGER DEFAULT 1,
+  can_manage_users INTEGER DEFAULT 0,
+  can_edit INTEGER DEFAULT 1,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id TEXT PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  tracking_type TEXT NOT NULL DEFAULT 'INDIVIDUAL' CHECK(tracking_type IN ('INDIVIDUAL', 'QUANTITY', 'BATCH')),
+  description TEXT,
+  icon TEXT DEFAULT 'Package',
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS products (
+  id TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  brand TEXT,
+  model TEXT,
+  image_url TEXT,
+  unit_of_measure TEXT DEFAULT 'unidad',
+  current_stock REAL DEFAULT 0,
+  min_stock REAL DEFAULT 5,
+  target_stock REAL DEFAULT 20,
+  unit_price REAL DEFAULT 0,
+  box_price REAL DEFAULT 0,
+  units_per_box REAL DEFAULT 1,
+  default_supplier TEXT,
+  is_consumable INTEGER DEFAULT 0,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS product_suppliers (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  supplier_name TEXT NOT NULL,
+  contact_info TEXT,
+  is_preferred INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS product_price_history (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  purchase_date TEXT NOT NULL,
+  unit_price REAL NOT NULL,
+  box_price REAL DEFAULT 0,
+  currency TEXT DEFAULT 'GTQ',
+  supplier_name TEXT,
+  invoice_number TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS inventory_items (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  permanent_code TEXT UNIQUE NOT NULL,
+  serial_number TEXT,
+  mac_address TEXT,
+  imei TEXT,
+  ip_address TEXT,
+  hostname TEXT,
+  specifications TEXT,
+  brand TEXT,
+  model TEXT,
+  current_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  current_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  current_assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  operational_status TEXT NOT NULL DEFAULT 'DISPONIBLE' CHECK(operational_status IN ('DISPONIBLE', 'ASIGNADO', 'RESERVADO', 'DEVOLUCION_PENDIENTE', 'EN_REVISION', 'AVERIADO', 'DADO_DE_BAJA', 'PERDIDO')),
+  physical_condition TEXT NOT NULL DEFAULT 'BUENO' CHECK(physical_condition IN ('NUEVO', 'BUENO', 'USADO', 'DANADO', 'AVERIADO', 'EN_REPARACION', 'NO_EVALUADO')),
+  purchase_date TEXT,
+  reception_date TEXT,
+  supplier TEXT,
+  purchase_price REAL,
+  replacement_value REAL,
+  residual_value REAL,
+  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),
+  warranty_expiration TEXT,
+  invoice_number TEXT,
+  purchase_order TEXT,
+  warranty_document_url TEXT,
+  invoice_document_url TEXT,
+  notes TEXT,
+  photo_url TEXT,
+  is_broken INTEGER DEFAULT 0,
+  broken_notes TEXT,
+  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  registered_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mobile_devices (
+  id TEXT PRIMARY KEY,
+  device_code TEXT UNIQUE NOT NULL,
+  brand TEXT NOT NULL,
+  model TEXT NOT NULL,
+  serial_number TEXT,
+  mac_address TEXT,
+  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  phone_number TEXT NOT NULL,
+  imei TEXT UNIQUE NOT NULL,
+  sim_iccid TEXT,
+  carrier TEXT DEFAULT 'Tigo',
+  plan_name TEXT,
+  monthly_cost REAL DEFAULT 0,
+  contract_number TEXT,
+  contract_start_date TEXT,
+  contract_end_date TEXT,
+  renewal_alert_days INTEGER DEFAULT 30,
+  delivery_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ASIGNADO' CHECK(status IN ('ASIGNADO', 'DISPONIBLE', 'DEVOLUCION_PENDIENTE', 'EN_REPARACION', 'DADO_DE_BAJA')),
+  notes_history TEXT DEFAULT '[]',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS consumable_stocks (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE RESTRICT,
+  quantity REAL NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+  batch_number TEXT DEFAULT 'LOTE-GENERAL',
+  unit_cost REAL DEFAULT 0,
+  expiration_date TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS assignments (
+  id TEXT PRIMARY KEY,
+  assignment_code TEXT UNIQUE NOT NULL,
+  item_id TEXT REFERENCES inventory_items(id) ON DELETE RESTRICT,
+  product_id TEXT REFERENCES products(id) ON DELETE RESTRICT,
+  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  quantity REAL DEFAULT 1,
+  assigned_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  origin_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  target_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expected_return_date TEXT,
+  returned_at TEXT,
+  return_condition TEXT CHECK(return_condition IN ('NUEVO', 'BUENO', 'USADO', 'DANADO', 'AVERIADO', 'EN_REPARACION', 'NO_EVALUADO') OR return_condition IS NULL),
+  return_notes TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVA' CHECK(status IN ('ACTIVA', 'DEVUELTO', 'DEVOLUCION_PENDIENTE', 'PERDIDO', 'TRANSFERIDO')),
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS delivery_actas (
+  id TEXT PRIMARY KEY,
+  acta_code TEXT UNIQUE NOT NULL,
+  acta_type TEXT NOT NULL DEFAULT 'ENTREGA_INICIAL',
+  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  employee_code TEXT,
+  employee_name TEXT NOT NULL,
+  employee_dpi TEXT,
+  employee_email TEXT,
+  employee_phone TEXT,
+  department_name TEXT,
+  supervisor_name TEXT,
+  delivered_by_name TEXT NOT NULL DEFAULT 'Alexander Turcios Melendez',
+  delivered_by_role TEXT DEFAULT 'Jefe de IT / Administración de Inventario',
+  delivered_by_signature TEXT,
+  items_json TEXT NOT NULL DEFAULT '[]',
+  replaced_item_json TEXT,
+  delivery_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status TEXT NOT NULL DEFAULT 'PENDIENTE_FIRMA',
+  employee_signature_data TEXT,
+  signed_at TEXT,
+  signed_ip TEXT,
+  public_token TEXT NOT NULL,
+  legal_notice TEXT NOT NULL DEFAULT 'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado en su correo electrónico. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.',
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS inventory_movements (
+  id TEXT PRIMARY KEY,
+  movement_type TEXT NOT NULL CHECK(movement_type IN ('RECEPCION', 'COMPRA', 'ENTRADA', 'ASIGNACION', 'TRANSFERENCIA', 'CONSUMO', 'DEVOLUCION', 'AJUSTE_AUTORIZADO', 'REPARACION', 'BAJA', 'PERDIDA')),
+  item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  quantity REAL NOT NULL DEFAULT 1,
+  unit_cost REAL,
+  total_cost REAL,
+  from_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  to_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  from_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  to_employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  from_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT NOT NULL,
+  reference_code TEXT,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS inventory_counts (
+  id TEXT PRIMARY KEY,
+  count_code TEXT UNIQUE NOT NULL,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  executed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  executed_by_name TEXT,
+  total_expected REAL DEFAULT 0,
+  total_counted REAL DEFAULT 0,
+  total_bodega REAL DEFAULT 0,
+  total_assigned_employees REAL DEFAULT 0,
+  discrepancies_count INTEGER DEFAULT 0,
+  details_json TEXT DEFAULT '[]',
+  notes TEXT,
+  status TEXT DEFAULT 'COMPLETADO',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS maintenance_records (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+  reported_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  scheduled_date TEXT,
+  reported_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  fault_description TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'MODERADA' CHECK(severity IN ('LEVE', 'MODERADA', 'CRITICA')),
+  technician_supplier TEXT,
+  repair_cost REAL DEFAULT 0,
+  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),
+  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'REPORTADA' CHECK(status IN ('REPORTADA', 'AGENDADA', 'EN_DIAGNOSTICO', 'EN_REPARACION', 'REPARADO', 'IRREPARABLE_REEMPLAZO', 'DADO_DE_BAJA')),
+  solution_type TEXT CHECK(solution_type IN ('REPARACION_INTERNA', 'REPARACION_PROVEEDOR', 'COMPRA_REEMPLAZO', 'BAJA_SIN_REEMPLAZO') OR solution_type IS NULL),
+  replacement_item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  replacement_reason TEXT,
+  updates_json TEXT DEFAULT '[]',
+  resolved_date TEXT,
+  resolution_notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS license_categories (
+  id TEXT PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  description TEXT,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS digital_services (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  category_id TEXT REFERENCES license_categories(id) ON DELETE SET NULL,
+  category_legacy TEXT,
+  provider TEXT NOT NULL,
+  contract_number TEXT,
+  contract_type TEXT DEFAULT 'LICENCIA_SAAS',
+  contact_name TEXT,
+  contact_phone TEXT,
+  contact_email TEXT,
+  sla_terms TEXT,
+  responsible_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  plan_type TEXT,
+  license_type TEXT DEFAULT 'USUARIOS',
+  seats_contracted INTEGER DEFAULT 1,
+  seats_used INTEGER DEFAULT 1,
+  cost_period TEXT NOT NULL CHECK(cost_period IN ('MENSUAL', 'ANUAL', 'UNICO', 'GRATUITO')),
+  amount REAL,
+  monthly_equivalent_cost REAL DEFAULT 0,
+  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),
+  start_date TEXT,
+  expiration_date TEXT,
+  renewal_date TEXT,
+  auto_renew TEXT DEFAULT 'SI' CHECK(auto_renew IN ('SI', 'NO', 'DESCONOCIDO')),
+  status TEXT NOT NULL DEFAULT 'ACTIVA' CHECK(status IN ('ACTIVA', 'GRATUITA', 'PAGO_UNICO', 'CADUCADA_INACTIVA', 'CANCELADA', 'PENDIENTE')),
+  payment_method_ref TEXT,
+  invoice_number TEXT,
+  warranty_document_url TEXT,
+  invoice_document_url TEXT,
+  assigned_users_text TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cost_records (
+  id TEXT PRIMARY KEY,
+  item_id TEXT REFERENCES inventory_items(id) ON DELETE SET NULL,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  digital_service_id TEXT REFERENCES digital_services(id) ON DELETE SET NULL,
+  cost_nature TEXT NOT NULL CHECK(cost_nature IN ('ADQUISICION', 'ADICIONAL_FLETE_INSTALACION', 'REPOSICION_ESTIMADA', 'MANTENIMIENTO', 'LICENCIA_SUSCRIPCION', 'OPERATIVO')),
+  concept TEXT NOT NULL,
+  amount REAL NOT NULL,
+  tax_amount REAL DEFAULT 0,
+  discount_amount REAL DEFAULT 0,
+  total_amount REAL NOT NULL,
+  currency TEXT DEFAULT 'GTQ' CHECK(currency IN ('GTQ', 'USD')),
+  exchange_rate REAL DEFAULT 1.0,
+  expense_date TEXT NOT NULL,
+  requesting_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  originating_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  recording_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  budget_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  charged_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  supplier TEXT,
+  invoice_number TEXT,
+  purchase_order TEXT,
+  warranty_document_url TEXT,
+  invoice_document_url TEXT,
+  cost_center TEXT,
+  status TEXT DEFAULT 'CONFIRMADO',
+  notes TEXT,
+  recorded_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS custom_reports (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  module TEXT NOT NULL CHECK(module IN ('INVENTARIO', 'CELULARES', 'MOVIMIENTOS', 'COSTOS', 'ASIGNACIONES', 'SERVICIOS', 'MANTENIMIENTO')),
+  columns_json TEXT NOT NULL DEFAULT '[]',
+  filters_json TEXT NOT NULL DEFAULT '[]',
+  group_by TEXT,
+  sort_by TEXT,
+  sort_direction TEXT DEFAULT 'DESC',
+  visualization_type TEXT DEFAULT 'TABLE',
+  date_range_preset TEXT DEFAULT 'ALL',
+  allowed_roles_json TEXT DEFAULT '["ADMIN","SUBADMIN","AREA_MANAGER","VIEWER"]',
+  created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  username TEXT NOT NULL,
+  user_role TEXT NOT NULL,
+  action TEXT NOT NULL,
+  module TEXT NOT NULL,
+  entity_id TEXT,
+  entity_name TEXT,
+  before_state_json TEXT,
+  after_state_json TEXT,
+  reason TEXT,
+  ip_address TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  description TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_items_permanent_code ON inventory_items(permanent_code);
+CREATE INDEX IF NOT EXISTS idx_items_dept ON inventory_items(current_department_id);
+CREATE INDEX IF NOT EXISTS idx_items_status ON inventory_items(operational_status);
+CREATE INDEX IF NOT EXISTS idx_celulares_imei ON mobile_devices(imei);
+CREATE INDEX IF NOT EXISTS idx_celulares_emp ON mobile_devices(employee_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_code ON assignments(assignment_code);
+CREATE INDEX IF NOT EXISTS idx_employees_code ON employees(employee_code);
+CREATE INDEX IF NOT EXISTS idx_actas_code ON delivery_actas(acta_code);
+CREATE INDEX IF NOT EXISTS idx_actas_emp ON delivery_actas(employee_id);
+CREATE INDEX IF NOT EXISTS idx_movements_date ON inventory_movements(created_at);
+CREATE INDEX IF NOT EXISTS idx_costs_date ON cost_records(expense_date);
+CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_logs(created_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_audit_immutable_del
+BEFORE DELETE ON audit_logs
+BEGIN
+  SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (DELETE prohibido)');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_audit_immutable_upd
+BEFORE UPDATE ON audit_logs
+BEGIN
+  SELECT RAISE(FAIL, 'Los registros de auditoria de SivarStock son estrictamente inmutables (UPDATE prohibido)');
+END;
+`;

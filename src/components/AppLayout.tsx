@@ -6,6 +6,7 @@ import Sidebar from './Sidebar';
 import Header from './Header';
 import FloatingDock from './FloatingDock';
 import QrScannerModal from './QrScannerModal';
+import OfflineSyncBanner from './OfflineSyncBanner';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -15,18 +16,18 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
 
-  // Si estamos en la página de login, no renderizamos el layout del sistema
-  const isLoginPage = pathname === '/login';
+  // Si estamos en login o en el enlace público de firma de acta (/acta/...), no forzamos el layout administrativo
+  const isPublicPage = pathname === '/login' || pathname?.startsWith('/acta/');
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [loadingAuth, setLoadingAuth] = useState(!isLoginPage);
+  const [loadingAuth, setLoadingAuth] = useState(!isPublicPage);
   const [alertCounts, setAlertCounts] = useState<{ lowStock?: number; expiringServices?: number; brokenItems?: number }>({});
 
   useEffect(() => {
-    if (isLoginPage) {
+    if (isPublicPage) {
       setLoadingAuth(false);
       return;
     }
@@ -70,9 +71,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
     } else {
       document.documentElement.classList.remove('dark');
     }
-  }, [isLoginPage, router]);
+  }, [isPublicPage, router]);
 
-  if (isLoginPage) {
+  if (isPublicPage) {
     return <>{children}</>;
   }
 
@@ -88,7 +89,6 @@ export default function AppLayout({ children }: AppLayoutProps) {
   }
 
   const handleToggleSidebar = () => {
-    // Si la pantalla es móvil, alternamos el drawer móvil; si es escritorio, colapsamos/expandimos
     if (window.innerWidth < 1024) {
       setMobileSidebarOpen(!mobileSidebarOpen);
     } else {
@@ -98,7 +98,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   return (
     <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
-      {/* Barra lateral: se oculta si sidebarCollapsed está activo en desktop */}
+      {/* Barra lateral */}
       {!sidebarCollapsed && (
         <Sidebar
           isOpen={mobileSidebarOpen}
@@ -117,6 +117,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
           sidebarCollapsed={sidebarCollapsed}
           currentUser={currentUser || undefined}
         />
+
+        {/* Banner de Cola Offline y Auto-Confirmación al entrar al Wi-Fi de la empresa */}
+        <OfflineSyncBanner />
 
         <main className={`flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 ${sidebarCollapsed ? 'pb-24' : ''}`}>
           {children}

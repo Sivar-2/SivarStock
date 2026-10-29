@@ -65,7 +65,6 @@ export default function ReportesPage() {
   const [executing, setExecuting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Columnas disponibles por módulo (en Quetzales de Guatemala Q GTQ)
   const availableColumnsByModule: Record<string, { key: string; label: string }[]> = {
@@ -76,6 +75,9 @@ export default function ReportesPage() {
       { key: 'brand', label: 'Marca' },
       { key: 'model', label: 'Modelo' },
       { key: 'serial_number', label: 'N° Serie' },
+      { key: 'mac_address', label: 'MAC Address' },
+      { key: 'imei', label: 'IMEI' },
+      { key: 'ip_address', label: 'Dirección IP' },
       { key: 'department_name', label: 'Área Actual' },
       { key: 'assigned_user_name', label: 'Custodio' },
       { key: 'operational_status', label: 'Disponibilidad' },
@@ -90,20 +92,27 @@ export default function ReportesPage() {
       { key: 'brand', label: 'Marca' },
       { key: 'model', label: 'Modelo' },
       { key: 'serial_number', label: 'N° Serie' },
+      { key: 'mac_address', label: 'MAC Address' },
       { key: 'operational_status', label: 'Estado' },
       { key: 'purchase_price', label: 'Valor Adquisición (Q)' },
       { key: 'supplier', label: 'Proveedor' },
     ],
     CELULARES: [
+      { key: 'device_code', label: 'Código' },
       { key: 'brand', label: 'Marca' },
       { key: 'model', label: 'Modelo' },
       { key: 'phone_number', label: 'N° Teléfono' },
+      { key: 'carrier', label: 'Operadora' },
+      { key: 'plan_name', label: 'Plan Contratado' },
+      { key: 'monthly_cost', label: 'Cuota Mensual (Q)' },
+      { key: 'contract_number', label: 'N° Contrato' },
+      { key: 'contract_end_date', label: 'Vencimiento Contrato' },
       { key: 'imei', label: 'IMEI' },
+      { key: 'serial_number', label: 'N° Serie' },
       { key: 'employee_name', label: 'Empleado Asignado' },
       { key: 'department_name', label: 'Departamento' },
       { key: 'delivered_date', label: 'Fecha Entrega' },
       { key: 'status', label: 'Estado' },
-      { key: 'notes', label: 'Notas / Historial' },
     ],
     MANTENIMIENTO: [
       { key: 'permanent_code', label: 'Código Activo' },
@@ -137,9 +146,13 @@ export default function ReportesPage() {
       { key: 'executed_by_name', label: 'Ejecutado Por' },
     ],
     SERVICIOS: [
-      { key: 'name', label: 'Servicio / Licencia' },
+      { key: 'name', label: 'Servicio / Contrato' },
+      { key: 'contract_type', label: 'Tipo Contrato' },
+      { key: 'contract_number', label: 'N° Contrato' },
       { key: 'category', label: 'Categoría' },
       { key: 'provider', label: 'Proveedor' },
+      { key: 'contact_name', label: 'Contacto Proveedor' },
+      { key: 'contact_phone', label: 'Teléfono Proveedor' },
       { key: 'cost_period', label: 'Periodicidad' },
       { key: 'amount', label: 'Importe' },
       { key: 'currency', label: 'Moneda' },
@@ -159,7 +172,7 @@ export default function ReportesPage() {
   };
 
   useEffect(() => {
-    const defaultCols = (availableColumnsByModule[selectedModule] || []).slice(0, 6).map((c) => c.key);
+    const defaultCols = (availableColumnsByModule[selectedModule] || []).slice(0, 8).map((c) => c.key);
     setSelectedColumns(defaultCols);
   }, [selectedModule]);
 
@@ -184,6 +197,55 @@ export default function ReportesPage() {
       const res = await fetch('/api/reports/saved');
       const d = await res.json();
       if (d.reports) setSavedReports(d.reports);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSaveReportConfig = async () => {
+    if (!reportTitle.trim()) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/reports/saved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: reportTitle.trim(),
+          description: `Reporte de ${selectedModule}`,
+          module: selectedModule,
+          columns: selectedColumns,
+          filters: { departmentId: filterDept, status: filterStatus, fromDate, toDate },
+          groupBy: groupBy || null,
+          visualizationType: visualization,
+        }),
+      });
+      if (res.ok) {
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 2500);
+        fetchSavedReports();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleLoadSavedReport = (rep: any) => {
+    setReportTitle(rep.name);
+    if (rep.module) setSelectedModule(rep.module);
+    if (Array.isArray(rep.columns) && rep.columns.length > 0) {
+      setTimeout(() => setSelectedColumns(rep.columns), 50);
+    }
+    if (rep.group_by !== undefined) setGroupBy(rep.group_by || '');
+    if (rep.visualization_type) setVisualization(rep.visualization_type);
+    setTimeout(() => handleRunReport(), 100);
+  };
+
+  const handleDeleteSavedReport = async (id: string) => {
+    try {
+      await fetch(`/api/reports/saved?id=${id}`, { method: 'DELETE' });
+      fetchSavedReports();
     } catch (err) {
       console.error(err);
     }
@@ -310,6 +372,14 @@ export default function ReportesPage() {
           {activeTab === 'BUILDER' && (
             <>
               <button
+                onClick={handleSaveReportConfig}
+                disabled={saving}
+                className="flex items-center gap-1.5 rounded-lg border border-military-200 bg-military-50 px-3 py-1.5 text-xs font-bold text-military-800 shadow-sm hover:bg-military-100"
+              >
+                {saveSuccess ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Save className="h-3.5 w-3.5" />}
+                <span>{saveSuccess ? 'Guardado' : 'Guardar Plantilla'}</span>
+              </button>
+              <button
                 onClick={() => handleExport('excel')}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
               >
@@ -367,76 +437,124 @@ export default function ReportesPage() {
       {activeTab === 'BUILDER' && (
         <div className="space-y-6">
           {/* Presets Rápidos de Análisis Económico */}
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <span className="text-xs font-bold uppercase text-slate-500 block mb-2">
-              Plantillas Rápidas para el Economista y Gerencia:
-            </span>
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => {
-                  setSelectedModule('BODEGA');
-                  setReportTitle('Reporte de Existencias en Bodega Central (Cuarto de Servidores)');
-                  setGroupBy('');
-                  applyDatePreset('historico');
-                }}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
-              >
-                <Server className="h-3.5 w-3.5 text-military-800" />
-                <span>Bodega Central (Cuarto Servidores)</span>
-              </button>
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+            <div>
+              <span className="text-xs font-bold uppercase text-slate-500 block mb-2">
+                Plantillas Rápidas para el Economista y Gerencia:
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => {
+                    setSelectedModule('BODEGA');
+                    setReportTitle('Reporte de Existencias en Bodega Central (Cuarto de Servidores)');
+                    setGroupBy('');
+                    applyDatePreset('historico');
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
+                >
+                  <Server className="h-3.5 w-3.5 text-military-800" />
+                  <span>Bodega Central (Cuarto Servidores)</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  setSelectedModule('COSTOS');
-                  setReportTitle('Inversión y Compras por Departamento (GTQ)');
-                  setGroupBy('charged_dept_name');
-                  applyDatePreset('mensual');
-                }}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
-              >
-                <DollarSign className="h-3.5 w-3.5 text-emerald-600" />
-                <span>Costos y Compras Mensuales (Q)</span>
-              </button>
+                <button
+                  onClick={() => {
+                    setSelectedModule('COSTOS');
+                    setReportTitle('Inversión y Compras por Departamento (GTQ)');
+                    setGroupBy('charged_dept_name');
+                    applyDatePreset('mensual');
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
+                >
+                  <DollarSign className="h-3.5 w-3.5 text-emerald-600" />
+                  <span>Costos y Compras Mensuales (Q)</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  setSelectedModule('MOVIMIENTOS');
-                  setReportTitle('Rotación de Inventario y Movimientos de Suministros');
-                  setGroupBy('movement_type');
-                  applyDatePreset('trimestral');
-                }}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
-              >
-                <TrendingUp className="h-3.5 w-3.5 text-blue-600" />
-                <span>Flujo de Movimientos Trimestral</span>
-              </button>
+                <button
+                  onClick={() => {
+                    setSelectedModule('MOVIMIENTOS');
+                    setReportTitle('Rotación de Inventario y Movimientos de Suministros');
+                    setGroupBy('movement_type');
+                    applyDatePreset('trimestral');
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
+                >
+                  <TrendingUp className="h-3.5 w-3.5 text-blue-600" />
+                  <span>Flujo de Movimientos Trimestral</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  setSelectedModule('CELULARES');
-                  setReportTitle('Parque de Celulares y Líneas Corporativas');
-                  setGroupBy('department_name');
-                  applyDatePreset('historico');
-                }}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
-              >
-                <Smartphone className="h-3.5 w-3.5 text-purple-600" />
-                <span>Parque de Celulares Corporativos</span>
-              </button>
+                <button
+                  onClick={() => {
+                    setSelectedModule('CELULARES');
+                    setReportTitle('Parque de Celulares, Líneas y Vencimiento de Contratos');
+                    setGroupBy('department_name');
+                    applyDatePreset('historico');
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
+                >
+                  <Smartphone className="h-3.5 w-3.5 text-purple-600" />
+                  <span>Líneas Móviles y Contratos</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  setSelectedModule('MANTENIMIENTO');
-                  setReportTitle('Averías y Reparaciones de Computadoras e Impresoras');
-                  setGroupBy('status');
-                  applyDatePreset('mensual');
-                }}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
-              >
-                <Wrench className="h-3.5 w-3.5 text-amber-600" />
-                <span>Historial de Averías y Sustituciones</span>
-              </button>
+                <button
+                  onClick={() => {
+                    setSelectedModule('SERVICIOS');
+                    setReportTitle('Contratos con Proveedores, Licencias y Vencimientos');
+                    setGroupBy('contract_type');
+                    applyDatePreset('historico');
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
+                >
+                  <Clock className="h-3.5 w-3.5 text-rose-600" />
+                  <span>Contratos con Proveedores</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setSelectedModule('MANTENIMIENTO');
+                    setReportTitle('Averías y Reparaciones de Computadoras e Impresoras');
+                    setGroupBy('status');
+                    applyDatePreset('mensual');
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-military-50 hover:border-military-600"
+                >
+                  <Wrench className="h-3.5 w-3.5 text-amber-600" />
+                  <span>Historial de Averías y Sustituciones</span>
+                </button>
+              </div>
             </div>
+
+            {savedReports.length > 0 && (
+              <div className="pt-2 border-t border-slate-100">
+                <span className="text-[11px] font-bold uppercase text-slate-400 block mb-1.5">
+                  Tus Reportes Personalizados Guardados:
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {savedReports.map((rep) => (
+                    <div
+                      key={rep.id}
+                      className="flex items-center gap-1.5 rounded-lg border border-military-200 bg-military-50/60 px-2.5 py-1 text-xs font-semibold text-military-900"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleLoadSavedReport(rep)}
+                        className="flex items-center gap-1 hover:underline"
+                      >
+                        <Bookmark className="h-3 w-3 text-military-700" />
+                        <span>{rep.name}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSavedReport(rep.id)}
+                        className="text-slate-400 hover:text-rose-600 ml-1"
+                        title="Eliminar reporte guardado"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* PARÁMETROS DEL REPORTE */}
@@ -459,14 +577,14 @@ export default function ReportesPage() {
                   onChange={(e) => setSelectedModule(e.target.value as any)}
                   className="w-full rounded-lg border border-slate-300 py-1.5 px-2 text-xs font-semibold text-slate-900 focus:border-military-600 focus:outline-none"
                 >
-                  <option value="INVENTARIO">Inventario Físico de Activos</option>
+                  <option value="INVENTARIO">Inventario Físico de Activos (Serie, MAC, IMEI)</option>
                   <option value="BODEGA">Bodega Central (Cuarto de Servidores)</option>
-                  <option value="CELULARES">Celulares y Líneas</option>
+                  <option value="CELULARES">Celulares, Líneas y Contratos Móviles</option>
+                  <option value="SERVICIOS">Contratos con Proveedores y Licencias</option>
+                  <option value="ASIGNACIONES">Asignaciones a Personal</option>
                   <option value="MANTENIMIENTO">Averías y Mantenimiento</option>
                   <option value="COSTOS">Costos y Facturas</option>
                   <option value="MOVIMIENTOS">Kardex y Movimientos</option>
-                  <option value="SERVICIOS">Servicios Digitales y Licencias</option>
-                  <option value="ASIGNACIONES">Asignaciones a Personal</option>
                 </select>
               </div>
 
@@ -716,9 +834,9 @@ export default function ReportesPage() {
             </div>
 
             <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-              <span className="font-bold text-xs uppercase text-emerald-700 block">3. Vistas Desnormalizadas</span>
+              <span className="font-bold text-xs uppercase text-emerald-700 block">3. Inventario, Empleados y Contratos</span>
               <p className="text-xs text-slate-600">
-                Selecciona las vistas SQL optimizadas como `vw_looker_inventory_costs` para generar dashboards automáticos en tiempo real.
+                Consulta todas las tablas (`inventory_items`, `employees`, `mobile_devices`, `digital_services`) sincronizadas desde tu servidor local.
               </p>
             </div>
           </div>
@@ -731,7 +849,10 @@ export default function ReportesPage() {
                   navigator.clipboard.writeText(`SELECT 
   i.permanent_code,
   p.name AS producto,
-  p.category AS categoria,
+  c.name AS categoria,
+  i.serial_number,
+  i.mac_address,
+  i.imei,
   d.name AS departamento,
   e.full_name AS custodio,
   i.operational_status AS estado,
@@ -739,8 +860,9 @@ export default function ReportesPage() {
   i.purchase_date AS fecha_compra
 FROM inventory_items i
 JOIN products p ON i.product_id = p.id
+LEFT JOIN categories c ON p.category_id = c.id
 LEFT JOIN departments d ON i.current_department_id = d.id
-LEFT JOIN employees e ON i.assigned_employee_id = e.id;`);
+LEFT JOIN employees e ON i.current_employee_id = e.id;`);
                   alert('Consulta SQL copiada al portapapeles');
                 }}
                 className="text-[11px] text-slate-400 hover:text-white"
@@ -752,7 +874,10 @@ LEFT JOIN employees e ON i.assigned_employee_id = e.id;`);
 {`SELECT 
   i.permanent_code,
   p.name AS producto,
-  p.category AS categoria,
+  c.name AS categoria,
+  i.serial_number,
+  i.mac_address,
+  i.imei,
   d.name AS departamento,
   e.full_name AS custodio,
   i.operational_status AS estado,
@@ -760,8 +885,9 @@ LEFT JOIN employees e ON i.assigned_employee_id = e.id;`);
   i.purchase_date AS fecha_compra
 FROM inventory_items i
 JOIN products p ON i.product_id = p.id
+LEFT JOIN categories c ON p.category_id = c.id
 LEFT JOIN departments d ON i.current_department_id = d.id
-LEFT JOIN employees e ON i.assigned_employee_id = e.id;`}
+LEFT JOIN employees e ON i.current_employee_id = e.id;`}
             </pre>
           </div>
         </div>

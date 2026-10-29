@@ -8,10 +8,8 @@ import {
   Sun,
   QrCode,
   Printer,
-  Search,
   CheckCircle,
   AlertCircle,
-  ArrowRightLeft,
   Smartphone,
   Layers,
   RefreshCw,
@@ -26,18 +24,31 @@ import {
   PenTool,
   RotateCcw,
   Save,
-  UserCheck
+  UserCheck,
+  Mail,
+  CheckSquare,
+  Square,
+  RectangleHorizontal,
+  Maximize2,
 } from 'lucide-react';
-import Link from 'next/link';
 
 export default function ConfiguracionPage() {
   const [activeTab, setActiveTab] = useState<
-    'firma_actas' | 'servidor_sync' | 'apariencia' | 'respaldos' | 'qr_generator' | 'scanner_validator' | 'menu_nombres' | 'dock_shortcuts'
+    | 'firma_actas'
+    | 'qr_generator'
+    | 'comunicaciones'
+    | 'servidor_sync'
+    | 'respaldos'
+    | 'apariencia'
+    | 'menu_nombres'
+    | 'dock_shortcuts'
   >('firma_actas');
 
   // Configuración de Firma y Emisor de Actas Digitales (Por defecto: Alexander Turcios Melendez)
   const [issuerName, setIssuerName] = useState('Alexander Turcios Melendez');
-  const [issuerRole, setIssuerRole] = useState('Jefe de IT / Administración de Inventario');
+  const [issuerRole, setIssuerRole] = useState(
+    'Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)'
+  );
   const [issuerSignatureData, setIssuerSignatureData] = useState<string>('');
   const [savingIssuer, setSavingIssuer] = useState(false);
   const [issuerSavedMsg, setIssuerSavedMsg] = useState<string | null>(null);
@@ -58,31 +69,34 @@ export default function ConfiguracionPage() {
   // Modo Nocturno
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  // Departamentos y Empleados para QR Batch
+  // Generador de Etiquetas QR y Códigos
   const [departments, setDepartments] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
   const [selectedDept, setSelectedDept] = useState('');
   const [selectedEmp, setSelectedEmp] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [qrUnassignedOnly, setQrUnassignedOnly] = useState(false);
+  const [qrPrintStatusFilter, setQrPrintStatusFilter] = useState<'' | 'PRINTED' | 'UNPRINTED'>('');
+  const [labelOrientation, setLabelOrientation] = useState<'HORIZONTAL' | 'CUADRADO'>('HORIZONTAL');
+  const [qrSearchText, setQrSearchText] = useState('');
   const [qrItems, setQrItems] = useState<any[]>([]);
+  const [selectedQrIds, setSelectedQrIds] = useState<string[]>([]);
   const [loadingQr, setLoadingQr] = useState(false);
 
-  // Escáner / Validador de Códigos
-  const [searchCode, setSearchCode] = useState('');
-  const [scannedAsset, setScannedAsset] = useState<any | null>(null);
-  const [loadingScan, setLoadingScan] = useState(false);
-  const [scanMessage, setScanMessage] = useState<string | null>(null);
-
-  // Sustitución de producto
-  const [showReplaceModal, setShowReplaceModal] = useState(false);
-  const [availableReplacements, setAvailableReplacements] = useState<any[]>([]);
-  const [selectedReplacementId, setSelectedReplacementId] = useState('');
-  const [replaceReason, setReplaceReason] = useState('');
+  // Configuración de Correo (Outlook) y Plantillas WhatsApp
+  const [commsConfig, setCommsConfig] = useState({
+    itSupportEmail: 'depto.sistemas@grupofpc.com',
+    ccEmail: 'depto.sistemas@grupofpc.com',
+    companyLegalName: 'FÁBRICA DE PERSIANAS Y COMPLEMENTOS, S.A.',
+    whatsappGreeting:
+      'Hola {EMPLEADO}, el Departamento de Tecnología e Innovación (IT) te comparte tu Acta Digital de Entrega ({ACTA}) para revisión y firma electrónica:',
+  });
 
   // Personalización de Nombres de Pestañas
   const defaultTabNames: Record<string, string> = {
     DASHBOARD: 'Inicio / Dashboard',
-    INVENTARIO: 'Inventario físico',
+    INVENTARIO: 'Bodega',
     CELULARES: 'Celulares y líneas',
     PRODUCTOS: 'Categorías y productos',
     MOVIMIENTOS: 'Entradas y movimientos',
@@ -93,16 +107,16 @@ export default function ConfiguracionPage() {
     REPORTES: 'Reportes y métricas',
     DEPARTAMENTOS: 'Áreas y departamentos',
     USUARIOS: 'Usuarios y permisos',
-    AUDITORIA: 'Historial de auditoría',
+    AUDITORIA: 'Bitácora',
     CONFIGURACION: 'Configuración',
   };
 
   const [tabNames, setTabNames] = useState<Record<string, string>>(defaultTabNames);
 
-  // Atajos de la Burbuja Flotante iPhone
+  // Atajos de la Burbuja Flotante
   const [dockShortcuts, setDockShortcuts] = useState({
     left1: { name: 'Inicio', href: '/' },
-    left2: { name: 'Inventario', href: '/inventario' },
+    left2: { name: 'Bodega', href: '/inventario' },
     right1: { name: 'Asignaciones', href: '/asignaciones' },
     right2: { name: 'Reportes', href: '/reportes' },
   });
@@ -122,11 +136,37 @@ export default function ConfiguracionPage() {
       .then((d) => {
         if (d.issuerConfig) {
           setIssuerName(d.issuerConfig.issuerName || 'Alexander Turcios Melendez');
-          setIssuerRole(d.issuerConfig.issuerRole || 'Jefe de IT / Administración de Inventario');
+          setIssuerRole(
+            d.issuerConfig.issuerRole ||
+              'Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)'
+          );
           setIssuerSignatureData(d.issuerConfig.issuerSignatureData || '');
         }
       })
       .catch(console.error);
+  };
+
+  const handleFetchBatchQr = async () => {
+    setLoadingQr(true);
+    try {
+      const params = new URLSearchParams();
+      if (selectedDept) params.append('department_id', selectedDept);
+      if (selectedEmp) params.append('employee_id', selectedEmp);
+      if (selectedCategory) params.append('category_id', selectedCategory);
+      if (qrUnassignedOnly) params.append('unassigned', 'true');
+      if (qrPrintStatusFilter) params.append('print_status', qrPrintStatusFilter);
+
+      const r = await fetch(`/api/qr/batch?${params.toString()}`);
+      const d = await r.json();
+      if (d.items) {
+        setQrItems(d.items);
+        setSelectedQrIds(d.items.map((i: any) => i.id));
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingQr(false);
+    }
   };
 
   useEffect(() => {
@@ -139,7 +179,7 @@ export default function ConfiguracionPage() {
     const savedTabs = localStorage.getItem('sivarstock_tab_names');
     if (savedTabs) {
       try {
-        setTabNames(JSON.parse(savedTabs));
+        setTabNames({ ...defaultTabNames, ...JSON.parse(savedTabs) });
       } catch (e) {
         console.error(e);
       }
@@ -154,17 +194,36 @@ export default function ConfiguracionPage() {
       }
     }
 
+    const savedComms = localStorage.getItem('sivarstock_comms_config');
+    if (savedComms) {
+      try {
+        setCommsConfig((prev) => ({ ...prev, ...JSON.parse(savedComms) }));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
     loadSyncStatus();
     loadIssuerConfig();
+    handleFetchBatchQr();
 
-    fetch('/api/catalogs')
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.departments) setDepartments(d.departments);
-        if (d.employees) setEmployees(d.employees);
+    Promise.all([
+      fetch('/api/catalogs').then((r) => r.json()),
+      fetch('/api/employees?all=true').then((r) => r.json()),
+    ])
+      .then(([catData, empData]) => {
+        if (catData.departments) setDepartments(catData.departments);
+        if (catData.categories) setCategories(catData.categories);
+        if (empData.employees) setEmployees(empData.employees);
       })
       .catch(console.error);
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'qr_generator') {
+      handleFetchBatchQr();
+    }
+  }, [selectedDept, selectedEmp, selectedCategory, qrUnassignedOnly, qrPrintStatusFilter, activeTab]);
 
   // Funciones para dibujar firma personalizada del responsable en Ajustes
   const getCanvasPoint = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -241,13 +300,17 @@ export default function ConfiguracionPage() {
         body: JSON.stringify({
           action: 'SAVE_ISSUER_SETTINGS',
           issuerName: issuerName.trim() || 'Alexander Turcios Melendez',
-          issuerRole: issuerRole.trim() || 'Jefe de IT / Administración de Inventario',
+          issuerRole:
+            issuerRole.trim() ||
+            'Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)',
           issuerSignatureData: issuerSignatureData || '',
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error al guardar firma');
-      setIssuerSavedMsg('¡Configuración de Firma y Responsable guardada exitosamente! Todas las actas nuevas usarán estos datos.');
+      setIssuerSavedMsg(
+        '¡Configuración de Firma y Responsable guardada exitosamente! Todas las actas nuevas usarán estos datos.'
+      );
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -255,7 +318,6 @@ export default function ConfiguracionPage() {
     }
   };
 
-  // Ejecutar Acción de Sincronización Nube / Servidor Local
   const handleSyncAction = async (action: 'SAVE_URL' | 'TEST_CONNECTION' | 'PUSH_TO_CLOUD' | 'PULL_FROM_CLOUD') => {
     setSyncLoading(true);
     setSyncStatusMsg(null);
@@ -303,95 +365,74 @@ export default function ConfiguracionPage() {
     alert('Atajos de la barra flotante guardados correctamente.');
   };
 
-  const handleFetchBatchQr = () => {
-    setLoadingQr(true);
-    const params = new URLSearchParams();
-    if (selectedDept) params.append('department_id', selectedDept);
-    if (selectedEmp) params.append('employee_id', selectedEmp);
-    if (selectedCategory) params.append('device_type', selectedCategory);
-
-    fetch(`/api/qr/batch?${params.toString()}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.items) setQrItems(d.items);
-      })
-      .catch(console.error)
-      .finally(() => setLoadingQr(false));
-  };
-
-  const handleScanLookup = async (codeToSearch?: string) => {
-    const code = (codeToSearch || searchCode).trim();
-    if (!code) return;
-    setLoadingScan(true);
-    setScanMessage(null);
-    setScannedAsset(null);
-
-    try {
-      const res = await fetch(`/api/inventory/items?search=${encodeURIComponent(code)}`);
-      const data = await res.json();
-      if (data.items && data.items.length > 0) {
-        const item =
-          data.items.find(
-            (i: any) =>
-              i.permanent_code?.toUpperCase() === code.toUpperCase() ||
-              i.serial_number?.toUpperCase() === code.toUpperCase() ||
-              i.imei?.toUpperCase() === code.toUpperCase() ||
-              i.mac_address?.toUpperCase() === code.toUpperCase()
-          ) || data.items[0];
-        setScannedAsset(item);
-      } else {
-        setScanMessage(`El código, serie o IMEI "${code}" no fue encontrado en la base de datos.`);
-      }
-    } catch (err: any) {
-      setScanMessage(`Error al buscar activo: ${err.message}`);
-    } finally {
-      setLoadingScan(false);
-    }
-  };
-
-  const openReplaceModal = () => {
-    if (!scannedAsset) return;
-    fetch('/api/inventory/items?status=DISPONIBLE')
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.items) {
-          setAvailableReplacements(d.items.filter((i: any) => i.id !== scannedAsset.id));
-        }
-        setShowReplaceModal(true);
-      })
-      .catch(console.error);
-  };
-
-  const handleExecuteReplacement = async () => {
-    if (!selectedReplacementId || !replaceReason.trim()) {
-      alert('Debes seleccionar el producto sustituto de bodega y escribir el motivo.');
+  const handleMarkQrPrintedStatus = async (ids: string[], printed: boolean) => {
+    if (ids.length === 0) {
+      alert('Selecciona al menos un dispositivo de la lista.');
       return;
     }
-
     try {
-      const res = await fetch('/api/inventory/lifecycle', {
+      const res = await fetch('/api/inventory/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'REPLACE_BROKEN_ITEM',
-          brokenItemId: scannedAsset.id,
-          replacementItemId: selectedReplacementId,
-          reason: replaceReason,
-          severity: 'MODERADA',
+          action: 'MARK_QR_PRINTED',
+          itemIds: ids,
+          printed,
+          labelOrientation,
         }),
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al sustituir equipo');
-
-      alert('¡Sustitución completada! El equipo anterior pasó a revisión/avería y el nuevo equipo de bodega fue asignado al custodio.');
-      setShowReplaceModal(false);
-      setReplaceReason('');
-      setSelectedReplacementId('');
-      handleScanLookup(scannedAsset.permanent_code);
-    } catch (err: any) {
-      alert(`Error al sustituir equipo: ${err.message}`);
+      if (res.ok) {
+        await handleFetchBatchQr();
+      }
+    } catch (e) {
+      console.error(e);
     }
+  };
+
+  const handlePrintSelectedQr = async () => {
+    if (selectedQrIds.length === 0) {
+      alert('Selecciona al menos un dispositivo para imprimir su etiqueta.');
+      return;
+    }
+    await handleMarkQrPrintedStatus(selectedQrIds, true);
+    setTimeout(() => {
+      window.print();
+    }, 150);
+  };
+
+  const handleExportSelectedQrCsv = () => {
+    const selectedItems = qrItems.filter((i) => selectedQrIds.includes(i.id));
+    if (selectedItems.length === 0) {
+      alert('Selecciona al menos un dispositivo para exportar.');
+      return;
+    }
+    const headers = [
+      'Codigo_Permanente',
+      'Modelo_Dispositivo',
+      'Numero_Serie_SN',
+      'Fecha_Entrega_Ingreso',
+      'Codigo_Empleado',
+      'Nombre_Empleado',
+      'Estado_Etiqueta',
+      'Orientacion',
+    ];
+    const rows = selectedItems.map((i) => [
+      `"${i.permanent_code || ''}"`,
+      `"${`${i.brand || ''} ${i.model || i.product_name || ''}`.trim()}"`,
+      `"${i.serial_number || 'S/N'}"`,
+      `"${(i.delivery_date || i.created_at || '').slice(0, 10)}"`,
+      `"${i.employee_code || 'EN_BODEGA'}"`,
+      `"${i.employee_name || 'En Bodega'}"`,
+      `"${Number(i.qr_printed) === 1 ? 'IMPRESO' : 'NO_IMPRESO'}"`,
+      `"${labelOrientation}"`,
+    ]);
+    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `etiquetas_qr_sivarstock_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
   };
 
   const handlePurgeAllData = async () => {
@@ -421,6 +462,21 @@ export default function ConfiguracionPage() {
     }
   };
 
+  const filteredQrItems = qrItems.filter((item) => {
+    if (!qrSearchText.trim()) return true;
+    const q = qrSearchText.toLowerCase();
+    return (
+      (item.permanent_code || '').toLowerCase().includes(q) ||
+      (item.product_name || '').toLowerCase().includes(q) ||
+      (item.model || '').toLowerCase().includes(q) ||
+      (item.serial_number || '').toLowerCase().includes(q) ||
+      (item.employee_name || '').toLowerCase().includes(q) ||
+      (item.employee_code || '').toLowerCase().includes(q)
+    );
+  });
+
+  const qrItemsToRender = filteredQrItems.filter((i) => selectedQrIds.includes(i.id));
+
   return (
     <div className="space-y-6">
       {/* Encabezado */}
@@ -431,23 +487,23 @@ export default function ConfiguracionPage() {
               Ajustes y Configuración General
             </h1>
             <span className="rounded-full bg-military-800 px-2.5 py-0.5 text-[11px] font-bold text-white">
-              SivarStock Enterprise
+              FÁBRICA DE PERSIANAS Y COMPLEMENTOS, S.A.
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Firma electrónica para Actas de Entrega, Servidor Local (Windows Server / LAN), respaldos, QR y personalización.
+            Firma electrónica, Estudio de Etiquetas QR (Horizontal/Cuadrado con control de impresos), Correo/WhatsApp y Servidor Local.
           </p>
         </div>
       </div>
 
-      {/* Navegación por Pestañas */}
+      {/* Navegación por Pestañas (Sin la pestaña "Escáner Validador y Cambio") */}
       <div className="flex overflow-x-auto border-b border-slate-200 bg-white px-2 pt-2 rounded-t-xl">
         {[
           { id: 'firma_actas', label: 'Firma y Responsable de Entregas', icon: PenTool },
+          { id: 'qr_generator', label: 'Etiquetas QR y Códigos (Impresos / Lotes)', icon: QrCode },
+          { id: 'comunicaciones', label: 'Correo (Outlook) y Plantillas WhatsApp', icon: Mail },
           { id: 'servidor_sync', label: 'Servidor Local (LAN) y Nube', icon: Server },
           { id: 'respaldos', label: 'Copias de Seguridad (BD)', icon: Database },
-          { id: 'qr_generator', label: 'Generador de Códigos QR/Barra', icon: QrCode },
-          { id: 'scanner_validator', label: 'Escáner Validador y Cambio', icon: Search },
           { id: 'apariencia', label: 'Modo Nocturno y Vista', icon: Moon },
           { id: 'menu_nombres', label: 'Nombres de Menú Lateral', icon: Layers },
           { id: 'dock_shortcuts', label: 'Atajos Burbuja Celular', icon: Smartphone },
@@ -470,7 +526,7 @@ export default function ConfiguracionPage() {
         })}
       </div>
 
-      {/* 0A. FIRMA Y RESPONSABLE DE ENTREGAS DIGITALES (Por defecto: Alexander Turcios Melendez) */}
+      {/* 1. FIRMA Y RESPONSABLE DE ENTREGAS DIGITALES */}
       {activeTab === 'firma_actas' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
           <div className="border-b border-slate-100 pb-4">
@@ -479,7 +535,10 @@ export default function ConfiguracionPage() {
               <span>Firma Automática y Responsable de Entrega de Equipos</span>
             </h2>
             <p className="text-xs text-slate-500 mt-1">
-              Por defecto, todas las Actas Digitales de Entrega y Cambio enviadas por WhatsApp salen firmadas automáticamente a nombre de <strong>Alexander Turcios Melendez</strong>. Si en el futuro ingresa personal nuevo, aquí puedes cambiar el nombre, cargo o dibujar una nueva firma.
+              Por defecto, todas las Actas Digitales salen preseleccionadas a nombre de{' '}
+              <strong>Alexander Turcios Melendez</strong> (
+              <em>Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)</em>
+              ).
             </p>
           </div>
 
@@ -515,7 +574,7 @@ export default function ConfiguracionPage() {
                   required
                   value={issuerRole}
                   onChange={(e) => setIssuerRole(e.target.value)}
-                  placeholder="Jefe de IT / Administración de Inventario"
+                  placeholder="Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)"
                   className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 focus:border-emerald-600 focus:outline-none"
                 />
               </div>
@@ -523,7 +582,7 @@ export default function ConfiguracionPage() {
               <div className="rounded-xl bg-emerald-50/70 border border-emerald-200 p-4 space-y-2">
                 <div className="flex items-center gap-2 text-xs font-bold text-emerald-900">
                   <UserCheck className="h-4 w-4 text-emerald-700" />
-                  <span>Vista Previa de Firma Automática en el Acta Digital:</span>
+                  <span>Vista Previa de Firma Automática en el Acta Oficial de 2 Páginas:</span>
                 </div>
                 <div className="rounded-lg bg-white border border-slate-200 p-4 text-center">
                   {issuerSignatureData ? (
@@ -539,7 +598,10 @@ export default function ConfiguracionPage() {
                   )}
                   <div className="border-t border-slate-300 mt-2 pt-1.5">
                     <p className="text-xs font-black text-slate-900">{issuerName || 'Alexander Turcios Melendez'}</p>
-                    <p className="text-[11px] text-slate-500">{issuerRole || 'Jefe de IT / Administración de Inventario'}</p>
+                    <p className="text-[11px] text-slate-500">
+                      {issuerRole ||
+                        'Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)'}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -548,7 +610,7 @@ export default function ConfiguracionPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-bold text-slate-700">
-                  Dibujar Firma Manuscrita (Opcional - Si se deja en blanco usa la firma caligráfica automática):
+                  Dibujar Firma Manuscrita (Opcional):
                 </label>
                 <button
                   type="button"
@@ -576,10 +638,6 @@ export default function ConfiguracionPage() {
                 />
               </div>
 
-              <p className="text-[11px] text-slate-500">
-                Puedes firmar aquí desde la pantalla táctil de tu <strong>Honor 400</strong> o con el mouse. Si no dibujas nada, el sistema estampará automáticamente la firma elegante de <strong>{issuerName || 'Alexander Turcios Melendez'}</strong>.
-              </p>
-
               <div className="pt-2 flex justify-end">
                 <button
                   type="submit"
@@ -595,7 +653,415 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* 0B. Servidor Local (LAN) y Sincronización con la Nube */}
+      {/* 2. ESTUDIO DE ETIQUETAS QR Y CÓDIGOS (HORIZONTAL / CUADRADO + CONTROL DE IMPRESOS) */}
+      {activeTab === 'qr_generator' && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <QrCode className="h-5 w-5 text-emerald-700" />
+                <span>Estudio de Etiquetas QR y Códigos de Activos</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Cada etiqueta incluye: <strong>Modelo, Código Permanente, Fecha de Entrega/Ingreso, S/N y Código del Empleado</strong>. Elige tamaño Horizontal o Cuadrado y lleva el control de qué etiquetas ya fueron impresas.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Selector de Orientación / Tamaño: Horizontal vs Cuadrado */}
+              <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 p-1">
+                <button
+                  type="button"
+                  onClick={() => setLabelOrientation('HORIZONTAL')}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                    labelOrientation === 'HORIZONTAL'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <RectangleHorizontal className="h-3.5 w-3.5" />
+                  <span>Horizontal</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLabelOrientation('CUADRADO')}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                    labelOrientation === 'CUADRADO'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  <span>Cuadrado</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleExportSelectedQrCsv}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm"
+              >
+                <Download className="h-4 w-4 text-blue-600" />
+                <span>Exportar CSV ({selectedQrIds.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrintSelectedQr}
+                className="flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-emerald-800 transition"
+              >
+                <Printer className="h-4 w-4" />
+                <span>Imprimir / Descargar PDF ({selectedQrIds.length})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Filtros de Etiquetas QR */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Buscar Dispositivo / Serie</label>
+              <input
+                type="text"
+                placeholder="SIV-IT-..., Serie, Modelo..."
+                value={qrSearchText}
+                onChange={(e) => setQrSearchText(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-emerald-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Estado de Impresión</label>
+              <select
+                value={qrPrintStatusFilter}
+                onChange={(e) => setQrPrintStatusFilter(e.target.value as any)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800"
+              >
+                <option value="">Todos (Impresos y No Impresos)</option>
+                <option value="UNPRINTED">Pendientes de Imprimir (No Impresos)</option>
+                <option value="PRINTED">Ya Impresos</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Por Departamento</label>
+              <select
+                value={selectedDept}
+                onChange={(e) => setSelectedDept(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800"
+              >
+                <option value="">Todos los departamentos</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} ({d.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Por Empleado</label>
+              <select
+                value={selectedEmp}
+                onChange={(e) => setSelectedEmp(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800"
+              >
+                <option value="">Todos los empleados</option>
+                {employees.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.full_name} ({e.employee_code})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Por Categoría</label>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800"
+              >
+                <option value="">Todas las categorías</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Barra de Selección Rápida */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setSelectedQrIds(filteredQrItems.map((i) => i.id))}
+                className="font-bold text-emerald-700 hover:underline"
+              >
+                Seleccionar todos ({filteredQrItems.length})
+              </button>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedQrIds(filteredQrItems.filter((i) => Number(i.qr_printed) === 0).map((i) => i.id))
+                }
+                className="font-bold text-amber-700 hover:underline"
+              >
+                Seleccionar solo NO impresos ({filteredQrItems.filter((i) => Number(i.qr_printed) === 0).length})
+              </button>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() => setQrUnassignedOnly(!qrUnassignedOnly)}
+                className={`rounded-lg px-2.5 py-1 font-bold border ${
+                  qrUnassignedOnly
+                    ? 'bg-emerald-700 text-white border-emerald-700'
+                    : 'bg-slate-50 text-slate-700 border-slate-200'
+                }`}
+              >
+                {qrUnassignedOnly ? '✓ Mostrando solo Sin Asignar (En Bodega)' : 'Filtrar solo Sin Asignar (Bodega)'}
+              </button>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() => setSelectedQrIds([])}
+                className="text-slate-500 hover:underline"
+              >
+                Limpiar selección
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleMarkQrPrintedStatus(selectedQrIds, true)}
+                className="rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1 font-bold text-emerald-800 hover:bg-emerald-100"
+              >
+                Marcar como Impresos
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMarkQrPrintedStatus(selectedQrIds, false)}
+                className="rounded-lg bg-slate-100 px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-200"
+              >
+                Marcar como No Impresos
+              </button>
+            </div>
+          </div>
+
+          {/* Tabla de Control de Dispositivos e Impresión */}
+          <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 sticky top-0">
+                <tr>
+                  <th className="p-2.5 w-8">Sel.</th>
+                  <th className="p-2.5">Código Permanente</th>
+                  <th className="p-2.5">Modelo / Producto</th>
+                  <th className="p-2.5">S/N (Serie)</th>
+                  <th className="p-2.5">Cód. Empleado</th>
+                  <th className="p-2.5">Fecha Entrega / Ingreso</th>
+                  <th className="p-2.5 text-center">Estado Etiqueta</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredQrItems.map((item) => {
+                  const isSelected = selectedQrIds.includes(item.id);
+                  const isPrinted = Number(item.qr_printed) === 1;
+                  return (
+                    <tr
+                      key={item.id}
+                      onClick={() => {
+                        setSelectedQrIds((prev) =>
+                          prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
+                        );
+                      }}
+                      className={`cursor-pointer transition ${
+                        isSelected ? 'bg-emerald-50/60' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <td className="p-2.5">
+                        {isSelected ? (
+                          <CheckSquare className="h-4 w-4 text-emerald-600" />
+                        ) : (
+                          <Square className="h-4 w-4 text-slate-300" />
+                        )}
+                      </td>
+                      <td className="p-2.5 font-mono font-bold text-slate-900">{item.permanent_code}</td>
+                      <td className="p-2.5 font-semibold text-slate-800">
+                        {item.brand} {item.model || item.product_name}
+                      </td>
+                      <td className="p-2.5 font-mono text-slate-600">{item.serial_number || 'S/N'}</td>
+                      <td className="p-2.5 font-mono font-bold text-emerald-800">
+                        {item.employee_code ? `${item.employee_code} (${item.employee_name})` : 'EN BODEGA'}
+                      </td>
+                      <td className="p-2.5 font-mono text-slate-500">
+                        {(item.delivery_date || item.created_at || '').slice(0, 10) || 'N/A'}
+                      </td>
+                      <td className="p-2.5 text-center">
+                        {isPrinted ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                            ✓ Impreso
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold text-amber-800">
+                            No Impreso
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Vista Previa Imprimible de Etiquetas (Horizontal vs Cuadrado) */}
+          <div>
+            <h3 className="text-xs font-bold uppercase text-slate-500 mb-3">
+              Vista Previa de Impresión ({qrItemsToRender.length} etiquetas en formato {labelOrientation}):
+            </h3>
+
+            {labelOrientation === 'HORIZONTAL' ? (
+              <div className="printable-qr-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {qrItemsToRender.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border-2 border-slate-800 bg-white p-3 shadow-sm flex items-center gap-3 print:border-black print:shadow-none"
+                  >
+                    {item.qrDataUrl && (
+                      <img
+                        src={item.qrDataUrl}
+                        alt={item.permanent_code}
+                        className="h-24 w-24 shrink-0 border border-slate-200 rounded p-0.5"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0 text-left space-y-0.5">
+                      <div className="text-[9px] font-black tracking-wider uppercase text-slate-500 border-b border-slate-200 pb-0.5">
+                        GRUPO FPC • IT INVENTARIO
+                      </div>
+                      <div className="text-xs font-black text-slate-900 truncate">
+                        {`${item.brand || ''} ${item.model || item.product_name || ''}`.trim()}
+                      </div>
+                      <div className="font-mono text-xs font-black text-emerald-800">
+                        CÓD: {item.permanent_code}
+                      </div>
+                      <div className="font-mono text-[10px] text-slate-700 truncate">
+                        <strong>S/N:</strong> {item.serial_number || 'S/N'}
+                      </div>
+                      <div className="font-mono text-[10px] text-slate-700">
+                        <strong>FECHA:</strong> {(item.delivery_date || item.created_at || '').slice(0, 10) || 'N/A'}
+                      </div>
+                      <div className="font-mono text-[10px] font-bold text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded inline-block">
+                        EMP: {item.employee_code || 'EN BODEGA'}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="printable-qr-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {qrItemsToRender.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border-2 border-slate-800 bg-white p-3 shadow-sm flex flex-col items-center text-center print:border-black print:shadow-none"
+                  >
+                    <div className="w-full text-[9px] font-black uppercase text-slate-600 border-b border-slate-200 pb-1 mb-1">
+                      GRUPO FPC • {item.department_code || 'IT'}
+                    </div>
+                    {item.qrDataUrl && (
+                      <img src={item.qrDataUrl} alt={item.permanent_code} className="h-24 w-24 my-1" />
+                    )}
+                    <span className="font-mono text-xs font-black text-slate-900">
+                      {item.permanent_code}
+                    </span>
+                    <span className="text-[11px] font-bold text-slate-800 line-clamp-1 mt-0.5">
+                      {`${item.brand || ''} ${item.model || item.product_name || ''}`.trim()}
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-600 mt-0.5">
+                      S/N: {item.serial_number || 'S/N'}
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-500">
+                      Fecha: {(item.delivery_date || item.created_at || '').slice(0, 10) || 'N/A'}
+                    </span>
+                    <span className="font-mono text-[10px] font-black text-emerald-900 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded mt-1">
+                      EMP: {item.employee_code || 'BODEGA'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 3. AUTOMATIZACIÓN DE CORREO (OUTLOOK) Y PLANTILLAS WHATSAPP */}
+      {activeTab === 'comunicaciones' && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Mail className="h-5 w-5 text-blue-600" />
+              <span>Automatización de Correo (Outlook) y Plantillas de WhatsApp</span>
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Configura el correo oficial de soporte IT y el mensaje predeterminado al enviar Actas Digitales por WhatsApp o abrir tu cliente de Outlook.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-3xl">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Razón Social en Actas Oficiales
+              </label>
+              <input
+                type="text"
+                value={commsConfig.companyLegalName}
+                onChange={(e) => setCommsConfig({ ...commsConfig, companyLegalName: e.target.value })}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-bold text-slate-900"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Correo Oficial del Departamento IT (Cláusulas y Copias Outlook)
+              </label>
+              <input
+                type="email"
+                value={commsConfig.itSupportEmail}
+                onChange={(e) => setCommsConfig({ ...commsConfig, itSupportEmail: e.target.value })}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-mono text-slate-900"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Plantilla de Mensaje para Envío de Acta Digital por WhatsApp
+              </label>
+              <textarea
+                rows={3}
+                value={commsConfig.whatsappGreeting}
+                onChange={(e) => setCommsConfig({ ...commsConfig, whatsappGreeting: e.target.value })}
+                className="w-full rounded-xl border border-slate-300 p-3 text-xs text-slate-800"
+              />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.setItem('sivarstock_comms_config', JSON.stringify(commsConfig));
+              alert('Configuración de Outlook y WhatsApp guardada correctamente.');
+            }}
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-5 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 shadow-sm"
+          >
+            <Save className="h-4 w-4" />
+            <span>Guardar Plantillas de Correo y WhatsApp</span>
+          </button>
+        </div>
+      )}
+
+      {/* 4. Servidor Local (LAN) y Sincronización con la Nube */}
       {activeTab === 'servidor_sync' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-4">
@@ -605,7 +1071,7 @@ export default function ConfiguracionPage() {
                 <span>Alojamiento en Windows Server Local (`serverlocal`) y Sincronización</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Trabaja desde tu Honor 400 o PC en la base de datos local (`data/sivarstock.db`). Si haces cambios fuera del Wi-Fi de la empresa, tu celular los guarda en cola y los confirma automáticamente al detectar el Wi-Fi corporativo.
+                Trabaja desde tu Honor 400 o PC en la base de datos local (`data/sivarstock.db`).
               </p>
             </div>
             <button
@@ -622,9 +1088,7 @@ export default function ConfiguracionPage() {
               className={`p-3.5 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
                 syncStatusMsg.type === 'success'
                   ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                  : syncStatusMsg.type === 'error'
-                  ? 'bg-rose-50 border-rose-200 text-rose-800'
-                  : 'bg-blue-50 border-blue-200 text-blue-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
               }`}
             >
               {syncStatusMsg.type === 'success' ? (
@@ -637,21 +1101,13 @@ export default function ConfiguracionPage() {
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Tarjeta 1: Servidor Local en la Red de la Empresa (LAN) */}
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-military-800 font-bold text-xs uppercase">
                   <Wifi className="h-4 w-4 text-emerald-600" />
                   <span>Direcciones IP del Servidor Local en el Wi-Fi de la Empresa</span>
                 </div>
-                <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                  Motor: {syncInfo?.engine === 'POSTGRESQL' ? 'PostgreSQL Directo' : 'SQLite Local Rápido'}
-                </span>
               </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Abre cualquiera de estas direcciones en el navegador de tu <strong>Honor 400</strong> o en cualquier PC conectada al Wi-Fi de la empresa (también usa este enlace para enviar las Actas por WhatsApp dentro de la red):
-              </p>
 
               <div className="space-y-2">
                 {syncInfo?.lanIps && syncInfo.lanIps.length > 0 ? (
@@ -685,97 +1141,32 @@ export default function ConfiguracionPage() {
                   </div>
                 )}
               </div>
-
-              {syncInfo?.counts && (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-200 text-center">
-                  <div className="rounded-lg bg-white p-2 border border-slate-200">
-                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Empleados</span>
-                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.employees}</span>
-                  </div>
-                  <div className="rounded-lg bg-white p-2 border border-slate-200">
-                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Activos Físicos</span>
-                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.inventory_items}</span>
-                  </div>
-                  <div className="rounded-lg bg-white p-2 border border-slate-200">
-                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Líneas Móviles</span>
-                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.mobile_devices}</span>
-                  </div>
-                  <div className="rounded-lg bg-white p-2 border border-slate-200">
-                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Contratos/Lic.</span>
-                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.digital_services}</span>
-                  </div>
-                  <div className="rounded-lg bg-white p-2 border border-slate-200">
-                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Actas Digitales</span>
-                    <span className="text-sm font-black text-emerald-700">{syncInfo.counts.delivery_actas ?? 0}</span>
-                  </div>
-                  <div className="rounded-lg bg-white p-2 border border-slate-200">
-                    <span className="block text-[10px] text-slate-400 uppercase font-bold">Movimientos</span>
-                    <span className="text-sm font-black text-slate-800">{syncInfo.counts.movements}</span>
-                  </div>
-                </div>
-              )}
-
-              <div className="rounded-lg bg-slate-900 p-3 text-[11px] text-slate-200 font-mono">
-                <span className="text-emerald-400 font-bold block mb-1">Archivo automático incluido para tu Windows Server:</span>
-                <code>Iniciar-Servidor-Local-SivarStock.bat</code>
-              </div>
             </div>
 
-            {/* Tarjeta 2: Sincronización con Base de Datos en la Nube (Supabase / PostgreSQL) */}
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 space-y-4 flex flex-col justify-between">
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-blue-800 font-bold text-xs uppercase">
-                    <CloudUpload className="h-4 w-4 text-blue-600" />
-                    <span>Respaldo / Sincronización Nube (PostgreSQL / Supabase)</span>
-                  </div>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                      syncInfo?.hasRemoteConfigured
-                        ? 'bg-blue-100 text-blue-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
+                <div className="flex items-center gap-2 text-blue-800 font-bold text-xs uppercase">
+                  <CloudUpload className="h-4 w-4 text-blue-600" />
+                  <span>Respaldo / Sincronización Nube (PostgreSQL / Supabase)</span>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    placeholder="postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres"
+                    value={cloudUrlInput}
+                    onChange={(e) => setCloudUrlInput(e.target.value)}
+                    className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono text-slate-800"
+                  />
+                  <button
+                    type="button"
+                    disabled={syncLoading || !cloudUrlInput.trim()}
+                    onClick={() => handleSyncAction('SAVE_URL')}
+                    className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-bold text-white hover:bg-slate-900 disabled:opacity-50"
                   >
-                    {syncInfo?.hasRemoteConfigured ? 'Nube Configurada' : 'Opcional'}
-                  </span>
+                    Guardar URL
+                  </button>
                 </div>
-
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  Además de tu base de datos local en Windows Server, puedes vincular una base PostgreSQL/Supabase en la nube para subir o descargar copias sincronizadas cuando lo desees.
-                </p>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    URL de Conexión PostgreSQL / Supabase (Cloud Database URL):
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      placeholder={
-                        syncInfo?.savedRemoteUrlMasked
-                          ? `Actual: ${syncInfo.savedRemoteUrlMasked}`
-                          : 'postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres'
-                      }
-                      value={cloudUrlInput}
-                      onChange={(e) => setCloudUrlInput(e.target.value)}
-                      className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:outline-none focus:border-blue-600"
-                    />
-                    <button
-                      type="button"
-                      disabled={syncLoading || !cloudUrlInput.trim()}
-                      onClick={() => handleSyncAction('SAVE_URL')}
-                      className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-bold text-white hover:bg-slate-900 disabled:opacity-50"
-                    >
-                      Guardar URL
-                    </button>
-                  </div>
-                </div>
-
-                {syncInfo?.lastSync && (
-                  <div className="text-[11px] text-slate-500 bg-white p-2.5 rounded-lg border border-slate-200">
-                    <strong>Última sincronización nube:</strong> {syncInfo.lastSync}
-                  </div>
-                )}
               </div>
 
               <div className="space-y-2 pt-3 border-t border-slate-200">
@@ -783,7 +1174,7 @@ export default function ConfiguracionPage() {
                   type="button"
                   disabled={syncLoading}
                   onClick={() => handleSyncAction('TEST_CONNECTION')}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
                 >
                   <CheckCircle className="h-4 w-4 text-emerald-600" />
                   <span>1. Probar Conexión con Servidor en la Nube</span>
@@ -793,29 +1184,21 @@ export default function ConfiguracionPage() {
                   <button
                     type="button"
                     disabled={syncLoading}
-                    onClick={() => {
-                      if (confirm('¿Deseas subir y sincronizar todos los cambios de este servidor local hacia la base de datos en la nube?')) {
-                        handleSyncAction('PUSH_TO_CLOUD');
-                      }
-                    }}
-                    className="flex items-center justify-center gap-1.5 rounded-lg bg-military-800 px-3 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-military-900 transition disabled:opacity-50"
+                    onClick={() => handleSyncAction('PUSH_TO_CLOUD')}
+                    className="flex items-center justify-center gap-1.5 rounded-lg bg-military-800 px-3 py-2.5 text-xs font-bold text-white hover:bg-military-900"
                   >
                     <CloudUpload className="h-4 w-4" />
-                    <span>Subir Cambios a Nube (Push)</span>
+                    <span>Subir a Nube (Push)</span>
                   </button>
 
                   <button
                     type="button"
                     disabled={syncLoading}
-                    onClick={() => {
-                      if (confirm('¿Deseas descargar los registros de la nube para actualizar tu base de datos local?')) {
-                        handleSyncAction('PULL_FROM_CLOUD');
-                      }
-                    }}
-                    className="flex items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-blue-800 transition disabled:opacity-50"
+                    onClick={() => handleSyncAction('PULL_FROM_CLOUD')}
+                    className="flex items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2.5 text-xs font-bold text-white hover:bg-blue-800"
                   >
                     <CloudDownload className="h-4 w-4" />
-                    <span>Bajar de Nube a Local (Pull)</span>
+                    <span>Bajar de Nube (Pull)</span>
                   </button>
                 </div>
               </div>
@@ -824,29 +1207,21 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* 1. Modo Nocturno y Apariencia */}
+      {/* 5. Modo Nocturno y Apariencia */}
       {activeTab === 'apariencia' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">Personalización de Apariencia</h2>
-            <p className="text-xs text-slate-500">
-              Adapta la interfaz para jornadas de manufactura en planta o trabajo de oficina en horarios nocturnos.
-            </p>
-          </div>
-
           <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200 bg-slate-50 max-w-xl">
             <div className="flex items-center gap-3">
-              <div className={`p-2.5 rounded-lg ${isDarkMode ? 'bg-slate-900 text-amber-400' : 'bg-amber-100 text-amber-700'}`}>
+              <div
+                className={`p-2.5 rounded-lg ${
+                  isDarkMode ? 'bg-slate-900 text-amber-400' : 'bg-amber-100 text-amber-700'
+                }`}
+              >
                 {isDarkMode ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
               </div>
               <div>
                 <span className="font-bold text-xs text-slate-800 block">
                   {isDarkMode ? 'Modo Oscuro (Activado)' : 'Modo Claro (Activado)'}
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  {isDarkMode
-                    ? 'Paleta oscura de alto contraste con tonos verde militar y zinc.'
-                    : 'Paleta limpia diurna de alta legibilidad.'}
                 </span>
               </div>
             </div>
@@ -867,16 +1242,9 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* 2. Copias de Seguridad de Base de Datos */}
+      {/* 6. Copias de Seguridad de Base de Datos */}
       {activeTab === 'respaldos' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">Copias de Seguridad y Respaldo de Información</h2>
-            <p className="text-xs text-slate-500">
-              Descarga la base de datos relacional completa (incluyendo Actas Digitales firmadas, empleados, DPI, líneas y contratos) para resguardo seguro.
-            </p>
-          </div>
-
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 max-w-3xl">
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 flex flex-col justify-between">
               <div>
@@ -885,7 +1253,7 @@ export default function ConfiguracionPage() {
                   <span>Base de Datos Completa (.db)</span>
                 </div>
                 <p className="text-xs text-slate-600 mt-2">
-                  Archivo SQLite binario completo (`sivarstock.db`) con todas las tablas relacionales, actas firmadas, índices y claves foráneas.
+                  Archivo SQLite binario completo (`sivarstock.db`) con todas las tablas relacionales y actas firmadas.
                 </p>
               </div>
               <a
@@ -905,7 +1273,7 @@ export default function ConfiguracionPage() {
                   <span>Respaldo Estructurado (.json)</span>
                 </div>
                 <p className="text-xs text-slate-600 mt-2">
-                  Dumping JSON con activos, consumibles, celulares, empleados, actas digitales de entrega, movimientos kardex y auditoría.
+                  Exportación completa en JSON de todos los activos, empleados, actas y bitácora.
                 </p>
               </div>
               <a
@@ -918,7 +1286,6 @@ export default function ConfiguracionPage() {
               </a>
             </div>
 
-            {/* Zona de Peligro: Limpiar Datos de Prueba */}
             <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-5 col-span-1 sm:col-span-2">
               <div className="flex items-start gap-3">
                 <div className="p-2 rounded-lg bg-rose-100 text-rose-700 shrink-0 mt-0.5">
@@ -928,16 +1295,13 @@ export default function ConfiguracionPage() {
                   <h3 className="text-sm font-bold text-rose-900">
                     Zona de Mantenimiento de Datos: Iniciar Inventario Real de Cero
                   </h3>
-                  <p className="text-xs text-rose-700 mt-1 leading-relaxed">
-                    Esta acción vacía con un solo clic todos los datos de prueba (activos individuales, productos, asignaciones, actas, consumibles, celulares, movimientos y empleados de prueba), conservando intactos los departamentos, categorías base y el usuario administrador actual.
-                  </p>
-                  <div className="mt-4 flex items-center gap-3">
+                  <div className="mt-3">
                     <button
                       onClick={() => setShowPurgeModal(true)}
                       className="flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700 transition"
                     >
                       <Trash2 className="h-4 w-4" />
-                      <span>Limpiar Base de Datos de Prueba (Iniciar Inventario de Cero)</span>
+                      <span>Limpiar Base de Datos de Prueba</span>
                     </button>
                   </div>
                 </div>
@@ -947,253 +1311,12 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* 3. Generador e Impresión de Códigos QR o Barra */}
-      {activeTab === 'qr_generator' && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-900">
-                Generador de Códigos QR y Etiquetas de Activos
-              </h2>
-              <p className="text-xs text-slate-500">
-                Filtra por departamento, por persona o por tipo de dispositivo para exportar e imprimir etiquetas.
-              </p>
-            </div>
-            {qrItems.length > 0 && (
-              <button
-                onClick={() => window.print()}
-                className="flex items-center gap-2 rounded-lg bg-military-800 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-military-900 transition"
-              >
-                <Printer className="h-4 w-4" />
-                <span>Imprimir Hoja de Etiquetas ({qrItems.length})</span>
-              </button>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Por Departamento</label>
-              <select
-                value={selectedDept}
-                onChange={(e) => setSelectedDept(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-military-600"
-              >
-                <option value="">Todos los departamentos</option>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} ({d.code})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Por Persona / Empleado</label>
-              <select
-                value={selectedEmp}
-                onChange={(e) => setSelectedEmp(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-military-600"
-              >
-                <option value="">Todos los empleados</option>
-                {employees.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.full_name} ({e.employee_code})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Por Dispositivo</label>
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-military-600"
-              >
-                <option value="">Todas las categorías</option>
-                <option value="LAPTOPS">Laptops / Portátiles</option>
-                <option value="DESKTOPS">Computadoras de Escritorio</option>
-                <option value="IMPRESORAS">Impresoras y Escáneres</option>
-                <option value="SERVIDORES">Servidores y Redes</option>
-                <option value="HERRAMIENTAS">Herramientas y Maquinaria</option>
-              </select>
-            </div>
-
-            <div className="flex items-end">
-              <button
-                onClick={handleFetchBatchQr}
-                disabled={loadingQr}
-                className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-military-800 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-military-900 transition disabled:opacity-50"
-              >
-                <QrCode className="h-4 w-4" />
-                <span>{loadingQr ? 'Generando...' : 'Generar Códigos'}</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="printable-qr-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {qrItems.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-xl border border-slate-300 bg-white p-4 shadow-sm flex flex-col items-center text-center relative print:border-black print:shadow-none"
-              >
-                <div className="w-full flex items-center justify-between border-b border-slate-100 pb-1.5 mb-2">
-                  <span className="text-[10px] font-bold text-slate-700 uppercase">SIVARSTOCK</span>
-                  <span className="text-[10px] font-bold text-military-800">{item.department_code || 'BOD'}</span>
-                </div>
-
-                {item.qrDataUrl && (
-                  <img
-                    src={item.qrDataUrl}
-                    alt={item.permanent_code}
-                    className="h-28 w-28 my-1"
-                  />
-                )}
-
-                <span className="font-mono text-xs font-black text-slate-900 tracking-wider">
-                  {item.permanent_code}
-                </span>
-                <span className="text-xs font-bold text-slate-800 mt-1 line-clamp-1">
-                  {item.product_name}
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  {item.employee_name ? `Custodio: ${item.employee_name}` : 'En Bodega Central'}
-                </span>
-                <span className="text-[10px] text-slate-400 mt-1">
-                  Ingreso: {item.created_at ? new Date(item.created_at).toLocaleDateString('es-GT') : 'N/A'}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {qrItems.length === 0 && !loadingQr && (
-            <div className="py-12 text-center text-xs text-slate-400">
-              Selecciona un departamento, empleado o categoría y presiona &quot;Generar Códigos&quot; para previsualizar las etiquetas imprimibles.
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 4. Escáner Validador y Cambio de Producto */}
-      {activeTab === 'scanner_validator' && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">
-              Escáner Validador y Módulo de Cambio de Producto
-            </h2>
-            <p className="text-xs text-slate-500">
-              Escanea o ingresa el código permanente, número de serie, MAC o IMEI del equipo para ver su ficha y sustituirlo en caso de avería.
-            </p>
-          </div>
-
-          <div className="flex gap-2 max-w-lg">
-            <input
-              type="text"
-              placeholder="Ingresa código SIV-IT-000001, Serie, MAC o IMEI..."
-              value={searchCode}
-              onChange={(e) => setSearchCode(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleScanLookup()}
-              className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-800 focus:bg-white focus:border-military-600 focus:outline-none"
-            />
-            <button
-              onClick={() => handleScanLookup()}
-              disabled={loadingScan}
-              className="flex items-center gap-1.5 rounded-xl bg-military-800 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-military-900 transition disabled:opacity-50"
-            >
-              <Search className="h-4 w-4" />
-              <span>Validar</span>
-            </button>
-          </div>
-
-          {scanMessage && (
-            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>{scanMessage}</span>
-            </div>
-          )}
-
-          {scannedAsset && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 max-w-2xl space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-black text-military-800">
-                      {scannedAsset.permanent_code}
-                    </span>
-                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                      {scannedAsset.operational_status}
-                    </span>
-                  </div>
-                  <h3 className="text-base font-bold text-slate-900 mt-1">
-                    {scannedAsset.product_name}
-                  </h3>
-                </div>
-                <Link
-                  href={`/inventario?search=${encodeURIComponent(scannedAsset.permanent_code)}`}
-                  className="text-xs font-bold text-military-700 hover:underline"
-                >
-                  Ver en Inventario →
-                </Link>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                <div>
-                  <span className="text-[11px] text-slate-500 block">Número de Serie:</span>
-                  <span className="font-mono font-semibold text-slate-800">{scannedAsset.serial_number || 'N/A'}</span>
-                </div>
-                <div>
-                  <span className="text-[11px] text-slate-500 block">MAC / IMEI:</span>
-                  <span className="font-mono font-semibold text-slate-800">
-                    {scannedAsset.mac_address || scannedAsset.imei || 'N/A'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[11px] text-slate-500 block">IP / Hostname:</span>
-                  <span className="font-mono font-semibold text-slate-800">
-                    {scannedAsset.ip_address || scannedAsset.hostname || 'N/A'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[11px] text-slate-500 block">Fecha de Registro:</span>
-                  <span className="font-semibold text-slate-800">
-                    {scannedAsset.created_at ? new Date(scannedAsset.created_at).toLocaleDateString('es-GT') : 'N/A'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[11px] text-slate-500 block">Departamento:</span>
-                  <span className="font-semibold text-slate-800">{scannedAsset.department_name || 'En Bodega'}</span>
-                </div>
-                <div>
-                  <span className="text-[11px] text-slate-500 block">Custodio Asignado:</span>
-                  <span className="font-semibold text-slate-800">
-                    {scannedAsset.employee_name || scannedAsset.assigned_user_name || 'Sin Asignar (En Bodega)'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-200 flex gap-3">
-                <button
-                  onClick={openReplaceModal}
-                  className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-amber-700 transition"
-                >
-                  <ArrowRightLeft className="h-4 w-4" />
-                  <span>Cambiar / Sustituir por otro de Bodega</span>
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 5. Personalización de Nombres de Pestañas */}
+      {/* 7. Personalización de Nombres de Pestañas */}
       {activeTab === 'menu_nombres' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-slate-900">Personalizar Nombres de Pestañas del Menú</h2>
-              <p className="text-xs text-slate-500">
-                Cambia el texto mostrado en el menú lateral conservando el orden de las categorías.
-              </p>
             </div>
             <button
               onClick={handleSaveTabNames}
@@ -1213,7 +1336,7 @@ export default function ConfiguracionPage() {
                   type="text"
                   value={tabNames[key] || ''}
                   onChange={(e) => setTabNames({ ...tabNames, [key]: e.target.value })}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-military-600"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800"
                 />
               </div>
             ))}
@@ -1221,15 +1344,12 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* 6. Atajos de la Burbuja Flotante */}
+      {/* 8. Atajos de la Burbuja Flotante */}
       {activeTab === 'dock_shortcuts' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-slate-900">Atajos de la Burbuja Flotante para Celular</h2>
-              <p className="text-xs text-slate-500">
-                Configura los atajos laterales de la burbuja inferior en tu Honor 400 (el escáner siempre ocupa la posición central).
-              </p>
             </div>
             <button
               onClick={handleSaveDockShortcuts}
@@ -1246,13 +1366,17 @@ export default function ConfiguracionPage() {
                 <input
                   type="text"
                   value={dockShortcuts.left1.name}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, left1: { ...dockShortcuts.left1, name: e.target.value } })}
+                  onChange={(e) =>
+                    setDockShortcuts({ ...dockShortcuts, left1: { ...dockShortcuts.left1, name: e.target.value } })
+                  }
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs mb-2"
                 />
                 <input
                   type="text"
                   value={dockShortcuts.left1.href}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, left1: { ...dockShortcuts.left1, href: e.target.value } })}
+                  onChange={(e) =>
+                    setDockShortcuts({ ...dockShortcuts, left1: { ...dockShortcuts.left1, href: e.target.value } })
+                  }
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-mono"
                 />
               </div>
@@ -1262,120 +1386,24 @@ export default function ConfiguracionPage() {
                 <input
                   type="text"
                   value={dockShortcuts.left2.name}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, left2: { ...dockShortcuts.left2, name: e.target.value } })}
+                  onChange={(e) =>
+                    setDockShortcuts({ ...dockShortcuts, left2: { ...dockShortcuts.left2, name: e.target.value } })
+                  }
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs mb-2"
                 />
                 <input
                   type="text"
                   value={dockShortcuts.left2.href}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, left2: { ...dockShortcuts.left2, href: e.target.value } })}
+                  onChange={(e) =>
+                    setDockShortcuts({ ...dockShortcuts, left2: { ...dockShortcuts.left2, href: e.target.value } })
+                  }
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-mono"
                 />
               </div>
             </div>
 
             <div className="p-3 text-center rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800">
-              Posición Central: Escáner QR / Barra (Fijo para lectura rápida)
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50">
-                <span className="text-xs font-bold text-slate-700 block mb-2">Atajo Derecho 1</span>
-                <input
-                  type="text"
-                  value={dockShortcuts.right1.name}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, right1: { ...dockShortcuts.right1, name: e.target.value } })}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs mb-2"
-                />
-                <input
-                  type="text"
-                  value={dockShortcuts.right1.href}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, right1: { ...dockShortcuts.right1, href: e.target.value } })}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-mono"
-                />
-              </div>
-
-              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50">
-                <span className="text-xs font-bold text-slate-700 block mb-2">Atajo Derecho 2</span>
-                <input
-                  type="text"
-                  value={dockShortcuts.right2.name}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, right2: { ...dockShortcuts.right2, name: e.target.value } })}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs mb-2"
-                />
-                <input
-                  type="text"
-                  value={dockShortcuts.right2.href}
-                  onChange={(e) => setDockShortcuts({ ...dockShortcuts, right2: { ...dockShortcuts.right2, href: e.target.value } })}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-mono"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal para Sustituir Producto */}
-      {showReplaceModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900">
-                Sustituir {scannedAsset?.permanent_code}
-              </h3>
-              <button
-                onClick={() => setShowReplaceModal(false)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                Seleccionar Producto Sustituto de Bodega *
-              </label>
-              <select
-                value={selectedReplacementId}
-                onChange={(e) => setSelectedReplacementId(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-800"
-              >
-                <option value="">Selecciona un activo disponible...</option>
-                {availableReplacements.map((rep) => (
-                  <option key={rep.id} value={rep.id}>
-                    {rep.permanent_code} - {rep.product_name} (Serie: {rep.serial_number || 'S/N'})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                Motivo del Cambio o Reemplazo *
-              </label>
-              <textarea
-                rows={3}
-                required
-                value={replaceReason}
-                onChange={(e) => setReplaceReason(e.target.value)}
-                placeholder="Ej. Equipo anterior presentó falla irreversible en tarjeta madre; se sustituye por activo de bodega."
-                className="w-full rounded-lg border border-slate-200 p-2 text-xs text-slate-800 focus:outline-none focus:border-military-600"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-              <button
-                onClick={() => setShowReplaceModal(false)}
-                className="rounded-lg px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleExecuteReplacement}
-                className="rounded-lg bg-military-800 px-5 py-2 text-xs font-bold text-white hover:bg-military-900 shadow-sm"
-              >
-                Confirmar Sustitución
-              </button>
+              Posición Central: Escáner QR / Barra (Al escanear abre la ficha del producto y permite hacer movimientos inmediatos)
             </div>
           </div>
         </div>
@@ -1385,44 +1413,17 @@ export default function ConfiguracionPage() {
       {showPurgeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4 border border-rose-200">
-            <div className="flex items-center gap-3 border-b border-rose-100 pb-3 text-rose-700">
-              <AlertTriangle className="h-6 w-6 shrink-0" />
-              <div>
-                <h3 className="text-base font-black text-rose-900">
-                  ¿Reiniciar Base de Datos a Cero?
-                </h3>
-                <span className="text-[11px] text-rose-600 font-semibold">
-                  Acción irreversible de alto impacto
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-2 text-xs text-slate-700">
-              <p>
-                Esta acción eliminará de forma permanente todos los datos de prueba registrados en el sistema:
-              </p>
-              <ul className="list-disc pl-5 space-y-1 text-slate-600 font-mono text-[11px]">
-                <li>Activos físicos individuales y movimientos kardex</li>
-                <li>Catálogo de productos y stocks consumibles</li>
-                <li>Historial de celulares, actas y asignaciones a personal</li>
-                <li>Registros de mantenimiento, servicios y costos</li>
-                <li>Empleados de prueba creados durante la demostración</li>
-              </ul>
-              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-[11px] text-emerald-800 font-medium">
-                ✓ Se conservarán tus Áreas / Departamentos, Categorías base y tu cuenta de Administrador.
-              </div>
-            </div>
-
+            <h3 className="text-base font-black text-rose-900">¿Reiniciar Base de Datos a Cero?</h3>
             <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
               <label className="block text-xs font-bold text-slate-800 mb-1">
-                Para confirmar, escribe la palabra <span className="text-rose-600 font-mono">LIMPIAR</span> en mayúsculas:
+                Escribe <span className="text-rose-600 font-mono">LIMPIAR</span> en mayúsculas:
               </label>
               <input
                 type="text"
                 placeholder="LIMPIAR"
                 value={purgeConfirmText}
                 onChange={(e) => setPurgeConfirmText(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-rose-600"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono font-bold text-slate-900"
               />
             </div>
 
@@ -1433,8 +1434,7 @@ export default function ConfiguracionPage() {
                   setShowPurgeModal(false);
                   setPurgeConfirmText('');
                 }}
-                disabled={purging}
-                className="rounded-lg px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                className="rounded-lg px-4 py-2 text-xs font-semibold text-slate-600"
               >
                 Cancelar
               </button>
@@ -1442,10 +1442,9 @@ export default function ConfiguracionPage() {
                 type="button"
                 onClick={handlePurgeAllData}
                 disabled={purging || purgeConfirmText.trim() !== 'LIMPIAR'}
-                className="flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700 shadow-sm disabled:opacity-50 transition"
+                className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
               >
-                <Trash2 className="h-4 w-4" />
-                <span>{purging ? 'Limpiando base...' : 'Confirmar y Purgar Todo'}</span>
+                Confirmar y Purgar Todo
               </button>
             </div>
           </div>

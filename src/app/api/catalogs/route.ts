@@ -63,14 +63,46 @@ export async function POST(req: NextRequest) {
     }
 
     if (type === 'department') {
+      if (data.id) {
+        const rawCode = (data.code || data.name?.substring(0, 4) || 'AREA').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+        await run(
+          `UPDATE departments SET code = ?, name = ?, cost_center = ?, manager_name = ?, is_bodega = ? WHERE id = ?`,
+          [
+            rawCode,
+            data.name.trim(),
+            data.costCenter?.trim() || null,
+            data.managerName?.trim() || null,
+            data.isBodega ? 1 : 0,
+            data.id,
+          ]
+        );
+        await logAudit({
+          userId: user.id,
+          username: user.username,
+          userRole: user.role,
+          action: 'EDITAR_DEPARTAMENTO',
+          module: 'CATALOGOS',
+          entityId: data.id,
+          entityName: data.name,
+        });
+        return NextResponse.json({ success: true, message: 'Departamento actualizado con éxito.', id: data.id });
+      }
+
       const id = `dept-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`;
       const rawCode = (data.code || data.name?.substring(0, 4) || 'AREA').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const existingCode = await queryOne(`SELECT id FROM departments WHERE code = ?`, [rawCode]);
       const finalCode = existingCode ? `${rawCode}-${Math.floor(10 + Math.random() * 89)}` : rawCode;
 
       await run(
-        `INSERT INTO departments (id, code, name, cost_center, manager_name) VALUES (?, ?, ?, ?, ?)`,
-        [id, finalCode, data.name.trim(), data.costCenter?.trim() || null, data.managerName?.trim() || null]
+        `INSERT INTO departments (id, code, name, cost_center, manager_name, is_bodega, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)`,
+        [
+          id,
+          finalCode,
+          data.name.trim(),
+          data.costCenter?.trim() || null,
+          data.managerName?.trim() || null,
+          data.isBodega ? 1 : 0,
+        ]
       );
 
       await logAudit({
@@ -172,6 +204,35 @@ export async function DELETE(req: NextRequest) {
 
     if (!type || !id) {
       return NextResponse.json({ error: 'Tipo e ID requeridos.' }, { status: 400 });
+    }
+
+    if (type === 'department') {
+      const dept = await queryOne<any>(`SELECT * FROM departments WHERE id = ?`, [id]);
+      if (!dept) {
+        return NextResponse.json({ error: 'Departamento no encontrado.' }, { status: 404 });
+      }
+      const activeEmps = await queryOne<any>(
+        `SELECT COUNT(*) as cnt FROM employees WHERE department_id = ? AND status = 'ACTIVO'`,
+        [id]
+      );
+      if (activeEmps && Number(activeEmps.cnt) > 0) {
+        return NextResponse.json(
+          { error: `Este departamento tiene ${activeEmps.cnt} empleado(s) activo(s). Trasládelos o délos de baja antes de eliminar el departamento.` },
+          { status: 400 }
+        );
+      }
+
+      await run(`UPDATE departments SET is_active = 0 WHERE id = ?`, [id]);
+      await logAudit({
+        userId: user.id,
+        username: user.username,
+        userRole: user.role,
+        action: 'ELIMINAR_DEPARTAMENTO',
+        module: 'CATALOGOS',
+        entityId: id,
+        entityName: dept.name,
+      });
+      return NextResponse.json({ success: true, message: `Departamento "${dept.name}" eliminado correctamente.` });
     }
 
     if (type === 'category') {

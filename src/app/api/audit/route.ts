@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import { getCurrentUser, checkPermission } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,9 +10,9 @@ export async function GET(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
     }
-    if (user.role !== 'ADMIN') {
+    if (String(user.username || '').toLowerCase() !== 'turcosivar') {
       return NextResponse.json(
-        { error: 'Acceso denegado: El módulo de Auditoría es exclusivo del rol ADMIN.' },
+        { error: 'Acceso denegado: El módulo de Bitácora es de acceso exclusivo para @turcosivar.' },
         { status: 403 }
       );
     }
@@ -41,12 +41,12 @@ export async function GET(req: NextRequest) {
       params.push(action);
     }
 
-    sql += ` ORDER BY created_at DESC LIMIT 100`;
+    sql += ` ORDER BY created_at DESC LIMIT 150`;
 
     const logs = await query(sql, params);
     return NextResponse.json({ success: true, count: logs.length, logs });
   } catch (error: any) {
-    console.error('Error al consultar auditoría:', error);
-    return NextResponse.json({ error: 'Error al consultar auditoría.' }, { status: 500 });
+    console.error('Error al consultar bitácora:', error);
+    return NextResponse.json({ error: 'Error al consultar bitácora.' }, { status: 500 });
   }
 }

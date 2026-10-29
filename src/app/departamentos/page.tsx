@@ -16,7 +16,8 @@ import {
   Archive,
   CreditCard,
   Briefcase,
-  FileCheck2
+  FileCheck2,
+  Trash2
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -120,6 +121,24 @@ export default function DepartamentosPage() {
       loadData();
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message });
+      alert(err.message);
+    }
+  };
+
+  const handleDeleteDept = async (dept: any) => {
+    if (!confirm(`¿Está seguro de eliminar el departamento "${dept.name}"?`)) return;
+    try {
+      const res = await fetch(`/api/catalogs?type=department&id=${encodeURIComponent(dept.id)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al eliminar departamento');
+
+      if (selectedDept?.id === dept.id) {
+        setSelectedDept(null);
+      }
+      await loadData();
+    } catch (err: any) {
       alert(err.message);
     }
   };
@@ -350,24 +369,36 @@ export default function DepartamentosPage() {
                           <Users className="h-3 w-3" />
                           {count}
                         </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingDept(d);
-                            setDeptForm({
-                              code: d.code,
-                              name: d.name,
-                              costCenter: d.cost_center || '',
-                              managerName: d.manager_name || '',
-                              isBodega: d.is_bodega || 0,
-                            });
-                            setShowDeptModal(true);
-                          }}
-                          className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-slate-700"
-                          title="Editar departamento"
-                        >
-                          <Edit className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingDept(d);
+                              setDeptForm({
+                                code: d.code,
+                                name: d.name,
+                                costCenter: d.cost_center || '',
+                                managerName: d.manager_name || '',
+                                isBodega: d.is_bodega || 0,
+                              });
+                              setShowDeptModal(true);
+                            }}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-slate-700"
+                            title="Editar departamento"
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteDept(d);
+                            }}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                            title="Eliminar departamento"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -394,13 +425,23 @@ export default function DepartamentosPage() {
                   </p>
                 </div>
 
-                <button
-                  onClick={() => setShowAddEmpModal(true)}
-                  className="flex items-center gap-2 rounded-xl bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-800 shadow-sm"
-                >
-                  <Plus className="h-4 w-4" />
-                  <span>Agregar Empleado</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleDeleteDept(selectedDept)}
+                    className="flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                    title="Eliminar este departamento"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Eliminar Área</span>
+                  </button>
+                  <button
+                    onClick={() => setShowAddEmpModal(true)}
+                    className="flex items-center gap-2 rounded-xl bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-800 shadow-sm"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Agregar Empleado</span>
+                  </button>
+                </div>
               </div>
 
               {/* Lista de Empleados del departamento */}

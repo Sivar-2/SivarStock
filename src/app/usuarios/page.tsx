@@ -16,7 +16,7 @@ import {
 
 const ALL_SYSTEM_TABS = [
   { key: 'DASHBOARD', label: 'Inicio / Dashboard', desc: 'Métricas, KPIs y alertas generales' },
-  { key: 'INVENTARIO', label: 'Inventario Físico', desc: 'Equipos, computadoras, MAC, serie e impresoras' },
+  { key: 'INVENTARIO', label: 'Bodega', desc: 'Equipos en cuarto de bodega, traslados, consumo y mantenimiento' },
   { key: 'CELULARES', label: 'Celulares y Líneas', desc: 'Móviles corporativos, IMEIs y vencimiento de contratos' },
   { key: 'PRODUCTOS', label: 'Categorías y Productos', desc: 'Catálogo de productos, consumibles y suministros' },
   { key: 'MOVIMIENTOS', label: 'Entradas y Movimientos', desc: 'Kardex y registro de ingresos/salidas' },
@@ -154,20 +154,25 @@ export default function UsuariosPage() {
     }
   };
 
-  const handleDeactivate = async (user: any) => {
+  const handleDeactivate = async (user: any, mode: 'DEACTIVATE' | 'DELETE' = 'DELETE') => {
     if (String(user.username).toLowerCase() === 'turcosivar') {
-      alert('El administrador principal @turcosivar no puede ser desactivado.');
+      alert('El administrador principal @turcosivar no puede ser eliminado ni desactivado.');
       return;
     }
-    if (!confirm(`¿Estás seguro de desactivar la cuenta de ${user.full_name} (@${user.username})?`)) return;
+    const msg =
+      mode === 'DELETE'
+        ? `¿Eliminar definitivamente el usuario y contraseña de ${user.full_name} (@${user.username})? Ya NO tendrá acceso a la plataforma a menos que se creen nuevas credenciales.`
+        : `¿Revocar contraseña y desactivar el acceso de ${user.full_name} (@${user.username})?`;
+    if (!confirm(msg)) return;
 
     try {
-      const res = await fetch(`/api/users?id=${user.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/users?id=${encodeURIComponent(user.id)}&mode=${mode}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'Error al desactivar');
+        alert(data.error || 'Error al procesar solicitud');
         return;
       }
+      if (data.message) alert(data.message);
       fetchUsers();
     } catch (err: any) {
       alert(err.message);
@@ -394,9 +399,18 @@ export default function UsuariosPage() {
                           </button>
                           {!isSuperAdmin && u.is_active && (
                             <button
-                              onClick={() => handleDeactivate(u)}
-                              className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 transition"
-                              title="Desactivar acceso"
+                              onClick={() => handleDeactivate(u, 'DEACTIVATE')}
+                              className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50 transition"
+                              title="Revocar contraseña / Desactivar acceso"
+                            >
+                              <Lock className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          {!isSuperAdmin && (
+                            <button
+                              onClick={() => handleDeactivate(u, 'DELETE')}
+                              className="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition"
+                              title="Eliminar usuario y contraseña definitivamente"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>

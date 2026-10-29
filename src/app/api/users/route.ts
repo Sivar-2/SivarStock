@@ -277,17 +277,18 @@ export async function DELETE(request: NextRequest) {
   try {
     const currentUser = await getCurrentUser();
     if (!currentUser || (currentUser.role !== 'ADMIN' && !currentUser.canManageUsers)) {
-      return NextResponse.json({ error: 'Solo el administrador puede desactivar usuarios.' }, { status: 403 });
+      return NextResponse.json({ error: 'Solo el administrador puede eliminar o revocar usuarios.' }, { status: 403 });
     }
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
+    const mode = searchParams.get('mode') || 'DELETE'; // 'DELETE' | 'DEACTIVATE'
 
     if (!id) {
       return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
     }
 
-    const targetUser = await queryOne<any>('SELECT username, email, full_name FROM users WHERE id = ?', [id]);
+    const targetUser = await queryOne<any>('SELECT id, username, email, full_name, employee_id FROM users WHERE id = ?', [id]);
     if (!targetUser) {
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 });
     }
@@ -296,22 +297,45 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'El usuario principal @turcosivar no puede ser eliminado.' }, { status: 400 });
     }
 
-    await run('UPDATE users SET is_active = 0 WHERE id = ?', [id]);
+    if (mode === 'DEACTIVATE') {
+      await run('UPDATE users SET is_active = 0, password_hash = ? WHERE id = ?', [`REVOKED_${Date.now()}`, id]);
+      await logAudit({
+        userId: currentUser.id,
+        username: currentUser.username,
+        userRole: currentUser.role,
+        action: 'REVOCAR_CREDENCIALES_USUARIO',
+        module: 'USUARIOS',
+        entityId: id,
+        entityName: `${targetUser.full_name} (@${targetUser.username})`,
+        reason: 'Revocación de usuario y contraseña (sin acceso hasta crear nuevas credenciales)',
+      });
+      return NextResponse.json({
+        success: true,
+        message: `Credenciales de @${targetUser.username} revocadas. No podrá ingresar a menos que se creen nuevas credenciales.`,
+      });
+    }
+
+    // Eliminación total de usuario y contraseña
+    await run('UPDATE employees SET user_account_id = NULL WHERE user_account_id = ? OR id = ?', [id, targetUser.employee_id || '']);
+    await run('DELETE FROM users WHERE id = ?', [id]);
 
     await logAudit({
       userId: currentUser.id,
       username: currentUser.username,
       userRole: currentUser.role,
-      action: 'DESACTIVAR_USUARIO',
+      action: 'ELIMINAR_USUARIO',
       module: 'USUARIOS',
       entityId: id,
       entityName: `${targetUser.full_name} (@${targetUser.username})`,
-      reason: 'Desactivación de cuenta de usuario',
+      reason: 'Eliminación definitiva de usuario y contraseña de acceso',
     });
 
-    return NextResponse.json({ success: true, message: 'Usuario desactivado exitosamente.' });
+    return NextResponse.json({
+      success: true,
+      message: `Usuario @${targetUser.username} y su contraseña han sido eliminados por completo del sistema.`,
+    });
   } catch (error: any) {
     console.error('Error deleting user:', error);
-    return NextResponse.json({ error: 'Error al desactivar usuario.' }, { status: 500 });
+    return NextResponse.json({ error: 'Error al eliminar usuario.' }, { status: 500 });
   }
 }

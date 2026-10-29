@@ -2,17 +2,10 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  History,
   ShieldAlert,
   Search,
-  Filter,
-  Calendar,
-  User,
-  Clock,
-  Terminal,
   ChevronDown,
   ChevronUp,
-  Download
 } from 'lucide-react';
 
 export default function AuditoriaPage() {
@@ -53,9 +46,9 @@ export default function AuditoriaPage() {
     return (
       <div className="rounded-2xl border border-rose-200 bg-rose-50 p-8 text-center max-w-xl mx-auto my-12">
         <ShieldAlert className="h-12 w-12 text-rose-600 mx-auto mb-3" />
-        <h2 className="text-lg font-black text-rose-900">Acceso Restringido - Solo Administradores</h2>
+        <h2 className="text-lg font-black text-rose-900">Acceso Restringido — Exclusivo @turcosivar</h2>
         <p className="text-xs text-rose-700 mt-1">
-          El módulo de bitácora de auditoría es de uso estrictamente confidencial para el rol ADMIN.
+          El módulo de Bitácora es de acceso estrictamente personal y exclusivo para @turcosivar (Alexander Turcios Melendez).
         </p>
       </div>
     );
@@ -66,10 +59,10 @@ export default function AuditoriaPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">
-            Bitácora de Auditoría e Historial de Cambios
+            Bitácora
           </h1>
           <p className="text-xs sm:text-sm text-slate-500">
-            Registro de operaciones sensibles, altas, reasignaciones, bajas y cambios de precios.
+            Registro confidencial de operaciones, movimientos, altas, bajas, actas y cambios del sistema (Exclusivo @turcosivar).
           </p>
         </div>
       </div>
@@ -99,11 +92,14 @@ export default function AuditoriaPage() {
               className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 px-2 text-xs text-slate-800 focus:border-military-600 focus:bg-white focus:outline-none"
             >
               <option value="">Todos los módulos</option>
-              <option value="INVENTARIO">Inventario</option>
-              <option value="ASIGNACIONES">Asignaciones</option>
-              <option value="COSTOS">Costos</option>
-              <option value="SERVICIOS_DIGITALES">Servicios Digitales</option>
-              <option value="MANTENIMIENTO">Mantenimiento</option>
+              <option value="INVENTARIO">Bodega / Inventario</option>
+              <option value="MOVIMIENTOS">Entradas y Movimientos</option>
+              <option value="ASIGNACIONES">Asignaciones y Actas</option>
+              <option value="COSTOS">Costos y Facturas</option>
+              <option value="SERVICIOS_DIGITALES">Licencias y Contratos</option>
+              <option value="MANTENIMIENTO">Averías y Mantenimiento</option>
+              <option value="USUARIOS">Usuarios y Permisos</option>
+              <option value="CATALOGOS">Categorías y Áreas</option>
               <option value="AUTENTICACION">Autenticación</option>
               <option value="CONFIGURACION">Configuración</option>
             </select>
@@ -115,7 +111,7 @@ export default function AuditoriaPage() {
       <div className="space-y-3">
         {loading ? (
           <div className="rounded-xl border border-slate-200 bg-white py-12 text-center text-xs text-slate-400">
-            Cargando bitácora de auditoría...
+            Cargando bitácora...
           </div>
         ) : logs.length > 0 ? (
           logs.map((log: any) => {
@@ -140,8 +136,10 @@ export default function AuditoriaPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-500 font-mono">
-                    <span>{new Date(log.created_at).toLocaleString('es-SV')}</span>
-                    <span className="font-bold text-slate-700">@{log.username} ({log.user_role})</span>
+                    <span>{new Date(log.created_at).toLocaleString('es-GT')}</span>
+                    <span className="font-bold text-slate-700">
+                      @{log.username} ({log.user_role})
+                    </span>
                   </div>
                 </div>
 
@@ -158,21 +156,29 @@ export default function AuditoriaPage() {
                       className="flex items-center gap-1 text-[11px] font-bold text-military-700 hover:underline"
                     >
                       {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                      <span>{isExpanded ? 'Ocultar payload de datos' : 'Ver datos antes / después'}</span>
+                      <span>{isExpanded ? 'Ocultar detalle de datos' : 'Ver datos antes / después'}</span>
                     </button>
 
                     {isExpanded && (
                       <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
                         {log.before_state_json && (
                           <div className="rounded-lg bg-red-50/50 p-3 border border-red-100 overflow-x-auto">
-                            <span className="text-[10px] uppercase font-bold text-red-700 block mb-1">Estado Anterior</span>
-                            <pre className="text-[11px] text-red-900 whitespace-pre-wrap">{log.before_state_json}</pre>
+                            <span className="text-[10px] uppercase font-bold text-red-700 block mb-1">
+                              Estado Anterior
+                            </span>
+                            <pre className="text-[11px] text-red-900 whitespace-pre-wrap">
+                              {log.before_state_json}
+                            </pre>
                           </div>
                         )}
                         {log.after_state_json && (
                           <div className="rounded-lg bg-emerald-50/50 p-3 border border-emerald-100 overflow-x-auto">
-                            <span className="text-[10px] uppercase font-bold text-emerald-700 block mb-1">Estado Posterior</span>
-                            <pre className="text-[11px] text-emerald-900 whitespace-pre-wrap">{log.after_state_json}</pre>
+                            <span className="text-[10px] uppercase font-bold text-emerald-700 block mb-1">
+                              Estado Posterior
+                            </span>
+                            <pre className="text-[11px] text-emerald-900 whitespace-pre-wrap">
+                              {log.after_state_json}
+                            </pre>
                           </div>
                         )}
                       </div>
@@ -184,7 +190,7 @@ export default function AuditoriaPage() {
           })
         ) : (
           <div className="rounded-xl border border-slate-200 bg-white py-12 text-center text-xs text-slate-400">
-            No se encontraron registros de auditoría.
+            No se encontraron registros en la bitácora.
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import {
   X,
   Camera,
@@ -13,12 +14,11 @@ import {
   CheckCircle2,
   RefreshCw,
   Package,
-  Building,
   User,
-  Shield,
   Clock,
   Sparkles,
-  QrCode
+  QrCode,
+  ExternalLink,
 } from 'lucide-react';
 
 interface QrScannerModalProps {
@@ -33,7 +33,6 @@ interface QrScannerModalProps {
 }
 
 export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScannerModalProps) {
-  // Estados de cámara y búsqueda
   const [manualCode, setManualCode] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -41,25 +40,26 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Estados de activo detectado
   const [loadingAsset, setLoadingAsset] = useState(false);
   const [assetData, setAssetData] = useState<any | null>(null);
   const [productOnlyData, setProductOnlyData] = useState<any | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
 
-  // Estados de acciones de ciclo de vida
-  const [activeAction, setActiveAction] = useState<'NONE' | 'ASSIGN' | 'SWAP' | 'RETURN' | 'DECOMMISSION' | 'REACTIVATE'>('NONE');
+  const [activeAction, setActiveAction] = useState<
+    'NONE' | 'ASSIGN' | 'SWAP' | 'RETURN' | 'DECOMMISSION' | 'REACTIVATE'
+  >('NONE');
   const [employees, setEmployees] = useState<any[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Formularios de acciones
   const [assignEmployeeId, setAssignEmployeeId] = useState('');
   const [assignNotes, setAssignNotes] = useState('');
 
   const [swapNewItemId, setSwapNewItemId] = useState('');
-  const [swapDestStatus, setSwapDestStatus] = useState<'AVERIADO' | 'EN_REVISION' | 'DADO_DE_BAJA' | 'DISPONIBLE'>('AVERIADO');
+  const [swapDestStatus, setSwapDestStatus] = useState<
+    'AVERIADO' | 'EN_REVISION' | 'DADO_DE_BAJA' | 'DISPONIBLE'
+  >('AVERIADO');
   const [swapCondition, setSwapCondition] = useState('AVERIADO');
   const [swapReason, setSwapReason] = useState('');
 
@@ -73,10 +73,8 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
   const [reactivateEmployeeId, setReactivateEmployeeId] = useState('');
   const [reactivateNotes, setReactivateNotes] = useState('');
 
-  // Puede editar: ADMIN o SUBADMIN con canEdit
   const canPerformActions = Boolean(
-    currentUser?.role === 'ADMIN' ||
-    (currentUser?.role === 'SUBADMIN' && currentUser?.canEdit !== false)
+    !currentUser || currentUser?.role === 'ADMIN' || currentUser?.canEdit !== false
   );
 
   useEffect(() => {
@@ -134,7 +132,9 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
       }
     } catch (err: any) {
       console.warn('Acceso a cámara no disponible:', err);
-      setCameraError('Cámara trasera no accesible. Puede utilizar el buscador manual por código o serie abajo.');
+      setCameraError(
+        'Cámara trasera no accesible. Puede utilizar el buscador manual por código o serie abajo.'
+      );
       setIsCameraActive(false);
     }
   };
@@ -151,7 +151,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
     setIsCameraActive(false);
   };
 
-  // Motor de lectura con BarcodeDetector nativo
   const startBarcodeScanning = () => {
     if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
 
@@ -186,8 +185,18 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
   };
 
   const handleLookupCode = async (codeToSearch: string) => {
-    const clean = codeToSearch.trim();
+    let clean = codeToSearch.trim();
     if (!clean) return;
+
+    if (clean.includes('search=')) {
+      try {
+        const u = new URL(clean);
+        clean = u.searchParams.get('search') || clean;
+      } catch {
+        const parts = clean.split('search=');
+        clean = decodeURIComponent(parts[parts.length - 1] || clean);
+      }
+    }
 
     setLoadingAsset(true);
     setLookupError(null);
@@ -197,7 +206,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
     setActionSuccess(null);
     setActionError(null);
 
-    // Pausar intervalo de escaneo mientras se inspecciona el activo
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
@@ -215,14 +223,12 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
         setProductOnlyData(data.product);
       } else {
         setAssetData(data);
-        // Pre-cargar valores por defecto
         if (data.item?.current_employee_id) {
           setAssignEmployeeId(data.item.current_employee_id);
         }
       }
     } catch (err: any) {
       setLookupError(err.message || 'Error al consultar código.');
-      // Reanudar escáner si hubo error
       startBarcodeScanning();
     } finally {
       setLoadingAsset(false);
@@ -240,7 +246,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
     startBarcodeScanning();
   };
 
-  // Ejecución de Ciclo de Vida
   const executeLifecycleAction = async (actionType: string, payload: any) => {
     setActionLoading(true);
     setActionError(null);
@@ -264,7 +269,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
       setActionSuccess(data.message || 'Operación completada exitosamente.');
       setActiveAction('NONE');
 
-      // Recargar datos actualizados del activo
       if (assetData?.item?.permanent_code) {
         await handleLookupCode(assetData.item.permanent_code);
       }
@@ -284,7 +288,7 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4 backdrop-blur-md overflow-y-auto">
       <div className="w-full max-w-xl rounded-3xl bg-military-950 border border-military-800 text-slate-100 shadow-2xl overflow-hidden my-auto flex flex-col max-h-[95vh]">
-        {/* Encabezado Corporativo */}
+        {/* Encabezado */}
         <div className="flex items-center justify-between border-b border-military-800/80 bg-military-900 px-5 py-4">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-military-800 border border-military-700/60 text-emerald-400">
@@ -292,10 +296,10 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
             </div>
             <div>
               <h3 className="text-sm font-black tracking-wide text-white flex items-center gap-2">
-                <span>Centro de Escaneo QR & Ciclo de Vida</span>
+                <span>Escáner QR / Barra — Ficha y Movimientos en Vivo</span>
               </h3>
               <p className="text-[11px] text-military-300 font-mono">
-                SivarStock Asset Lifecycle v2.5
+                Escanea cualquier etiqueta para abrir su ficha y realizar movimientos al instante
               </p>
             </div>
           </div>
@@ -312,10 +316,8 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
 
         {/* Cuerpo del Modal */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-          {/* Si no hay activo seleccionado: Cámara + Buscador manual */}
           {!assetData && !productOnlyData && (
             <>
-              {/* Visor de Cámara */}
               <div className="relative flex h-60 sm:h-72 w-full flex-col items-center justify-center rounded-2xl bg-black border border-military-800 overflow-hidden shadow-inner">
                 {isCameraActive ? (
                   <>
@@ -326,7 +328,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                       autoPlay
                       muted
                     />
-                    {/* Retícula de enfoque militar */}
                     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                       <div className="relative h-44 w-44 rounded-2xl border-2 border-emerald-400/80 bg-emerald-500/10 shadow-[0_0_25px_rgba(16,185,129,0.3)] animate-pulse">
                         <div className="absolute top-2 left-2 h-4 w-4 border-t-2 border-l-2 border-emerald-300" />
@@ -356,10 +357,9 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                 </div>
               )}
 
-              {/* Buscador Manual de Códigos con Autocompletado */}
               <div className="rounded-2xl border border-military-800 bg-military-900/60 p-4">
                 <label className="block text-xs font-bold text-military-200 mb-2 uppercase tracking-wider">
-                  Búsqueda directa por Código Permanente o Serie:
+                  O busque por Código Permanente, Serie (S/N) o Empleado:
                 </label>
                 <form
                   onSubmit={(e) => {
@@ -375,19 +375,19 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                       placeholder="ej. SIV-IT-000001, EMP-001 o N° de Serie"
                       value={manualCode}
                       onChange={(e) => setManualCode(e.target.value)}
-                      className="w-full rounded-xl border border-military-700 bg-military-950 py-2.5 pl-10 pr-3 text-xs sm:text-sm text-white placeholder-military-500 uppercase font-mono tracking-wider focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      className="w-full rounded-xl border border-military-700 bg-military-950 py-2.5 pl-10 pr-3 text-xs sm:text-sm text-white placeholder-military-500 uppercase font-mono tracking-wider focus:border-emerald-500 focus:outline-none"
                     />
                   </div>
                   <button
                     type="submit"
                     disabled={!manualCode.trim() || loadingAsset}
-                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 transition disabled:opacity-50"
+                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg hover:bg-emerald-500 transition disabled:opacity-50"
                   >
                     {loadingAsset ? (
                       <RefreshCw className="h-4 w-4 animate-spin" />
                     ) : (
                       <>
-                        <span>Buscar</span>
+                        <span>Abrir Ficha</span>
                         <ArrowRight className="h-4 w-4" />
                       </>
                     )}
@@ -404,13 +404,12 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
             </>
           )}
 
-          {/* Si detectó un Producto General (Catálogo) */}
           {productOnlyData && (
             <div className="space-y-4">
               <div className="rounded-2xl border border-military-800 bg-military-900 p-5">
                 <div className="flex items-center justify-between pb-3 border-b border-military-800">
                   <span className="text-xs font-mono font-bold text-emerald-400">
-                    CÓDIGO DE PRODUCTO MAESTRO: {productOnlyData.code}
+                    PRODUCTO DE CATÁLOGO: {productOnlyData.code}
                   </span>
                   <button
                     onClick={handleResetScan}
@@ -421,43 +420,52 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                   </button>
                 </div>
                 <h4 className="text-lg font-black text-white mt-2">{productOnlyData.name}</h4>
-                <p className="text-xs text-military-300 mt-1">{productOnlyData.description || 'Sin descripción adicional'}</p>
-                <div className="grid grid-cols-2 gap-3 mt-4 text-xs font-mono">
-                  <div className="p-3 rounded-xl bg-military-950 border border-military-800">
-                    <span className="text-military-400 block text-[10px]">Stock General:</span>
-                    <span className="text-base font-bold text-emerald-400">
-                      {productOnlyData.current_stock} {productOnlyData.unit_of_measure}s
-                    </span>
-                  </div>
-                  <div className="p-3 rounded-xl bg-military-950 border border-military-800">
-                    <span className="text-military-400 block text-[10px]">Precio Unitario:</span>
-                    <span className="text-base font-bold text-emerald-400">
-                      Q{productOnlyData.unit_price}
-                    </span>
-                  </div>
+                <div className="mt-4 flex justify-end">
+                  <Link
+                    href={`/productos`}
+                    onClick={() => {
+                      stopCamera();
+                      onClose();
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500"
+                  >
+                    <span>Ver en Categorías y Productos</span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Link>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Tarjeta de Identidad del Activo Detectado */}
+          {/* Ficha del Activo Escaneado */}
           {assetData && item && (
             <div className="space-y-4">
-              {/* Botón Volver a Escanear */}
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-mono uppercase tracking-wider text-military-400">
-                  Activo Físico Identificado
+                <span className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 font-bold">
+                  ✓ Ficha del Producto Escaneado
                 </span>
-                <button
-                  onClick={handleResetScan}
-                  className="flex items-center gap-1 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  <span>Escanear Otro Activo</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  <Link
+                    href={`/inventario?search=${encodeURIComponent(item.permanent_code)}`}
+                    onClick={() => {
+                      stopCamera();
+                      onClose();
+                    }}
+                    className="flex items-center gap-1 text-xs font-bold text-cyan-400 hover:underline"
+                  >
+                    <span>Abrir en Bodega</span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Link>
+                  <button
+                    onClick={handleResetScan}
+                    className="flex items-center gap-1 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>Escanear Otro</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Mensajes de Resultado de Acción */}
               {actionSuccess && (
                 <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/40 p-3 text-xs text-emerald-300 flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
@@ -471,25 +479,20 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                 </div>
               )}
 
-              {/* Tarjeta Principal de Identidad */}
               <div className="rounded-2xl border border-military-800 bg-military-900/90 p-5 space-y-4 shadow-xl">
-                {/* Cabecera del Activo */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-base font-black tracking-wider text-emerald-400 bg-military-950 px-2.5 py-1 rounded-lg border border-military-800">
                         {item.permanent_code}
                       </span>
-                      {/* Badge de Estado Operativo */}
                       <span
                         className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold border ${
                           item.operational_status === 'DISPONIBLE'
                             ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                             : item.operational_status === 'ASIGNADO'
                             ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                            : item.operational_status === 'AVERIADO'
-                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                            : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                            : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                         }`}
                       >
                         {item.operational_status}
@@ -503,15 +506,14 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                       {item.product_name}
                     </h3>
                     <p className="text-xs text-military-300 mt-0.5 font-mono">
-                      Categoría: {item.category_name} | {item.brand || item.product_brand || 'Genérico'} {item.model || item.product_model || ''}
+                      Modelo: {item.brand || item.product_brand || ''} {item.model || item.product_model || ''} | Categoría: {item.category_name}
                     </p>
                   </div>
                 </div>
 
-                {/* Serie y Detalles Técnicos */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs font-mono">
                   <div className="p-2.5 rounded-xl bg-military-950 border border-military-800/80">
-                    <span className="text-[10px] text-military-400 block uppercase">N° Serie:</span>
+                    <span className="text-[10px] text-military-400 block uppercase">S/N (Serie):</span>
                     <span className="font-bold text-white truncate block">
                       {item.serial_number || 'SIN SERIE'}
                     </span>
@@ -519,18 +521,17 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                   <div className="p-2.5 rounded-xl bg-military-950 border border-military-800/80">
                     <span className="text-[10px] text-military-400 block uppercase">Ubicación Actual:</span>
                     <span className="font-bold text-white truncate block">
-                      {item.department_name || 'Cuarto de Servidores (Bodega)'}
+                      {item.department_name || 'Bodega Central'}
                     </span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-military-950 border border-military-800/80 col-span-2 sm:col-span-1">
-                    <span className="text-[10px] text-military-400 block uppercase">Código Producto:</span>
+                    <span className="text-[10px] text-military-400 block uppercase">Cód. Empleado:</span>
                     <span className="font-bold text-emerald-400 truncate block">
-                      {item.product_code}
+                      {item.employee_code || 'EN BODEGA'}
                     </span>
                   </div>
                 </div>
 
-                {/* Bloque Destacado: PROPIETARIO / RESPONSABLE ACTUAL */}
                 <div className="rounded-2xl border border-military-700/80 bg-gradient-to-br from-military-950 to-military-900 p-4 shadow-md">
                   <div className="flex items-center gap-2 mb-2">
                     <User className="h-4 w-4 text-emerald-400" />
@@ -542,37 +543,28 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                   {item.employee_name ? (
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-extrabold text-white">
-                          {item.employee_name}
-                        </span>
+                        <span className="text-sm font-extrabold text-white">{item.employee_name}</span>
                         <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-xs font-mono font-bold text-emerald-300 border border-emerald-500/30">
                           {item.employee_code || 'EMP-ACTIVO'}
                         </span>
                       </div>
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-military-300">
-                        {item.department_name && (
-                          <span>Área: <strong className="text-white">{item.department_name}</strong></span>
-                        )}
-                        {item.employee_email && (
-                          <span>Correo: <strong className="text-white">{item.employee_email}</strong></span>
-                        )}
-                      </div>
                       {activeAssignment && (
                         <div className="pt-2 mt-2 border-t border-military-800 flex items-center justify-between text-[11px] font-mono text-military-300">
-                          <span>Código Asignación: <strong className="text-emerald-400">{activeAssignment.assignment_code}</strong></span>
-                          <span>Fecha: {new Date(activeAssignment.assigned_at).toLocaleDateString('es-GT')}</span>
+                          <span>
+                            Asignación: <strong className="text-emerald-400">{activeAssignment.assignment_code}</strong>
+                          </span>
+                          <span>Fecha Entrega: {new Date(activeAssignment.assigned_at).toLocaleDateString('es-GT')}</span>
                         </div>
                       )}
                     </div>
                   ) : (
                     <div className="py-2 text-xs text-military-400 flex items-center gap-2">
                       <Package className="h-4 w-4 text-emerald-500" />
-                      <span>Sin custodio asignado. El activo se encuentra resguardado en Bodega Central listo para asignación.</span>
+                      <span>Disponible en Bodega Central — listo para movimiento o asignación.</span>
                     </div>
                   )}
                 </div>
 
-                {/* Historial rápido de últimos movimientos */}
                 {assetData.recentMovements && assetData.recentMovements.length > 0 && (
                   <div className="rounded-xl bg-military-950 p-3 border border-military-800 text-xs">
                     <span className="text-[10px] font-mono uppercase tracking-wider text-military-400 block mb-2 flex items-center gap-1.5">
@@ -581,7 +573,10 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                     </span>
                     <div className="space-y-1.5">
                       {assetData.recentMovements.map((mov: any) => (
-                        <div key={mov.id} className="flex items-center justify-between text-[11px] text-military-300 border-b border-military-900 pb-1">
+                        <div
+                          key={mov.id}
+                          className="flex items-center justify-between text-[11px] text-military-300 border-b border-military-900 pb-1"
+                        >
                           <span className="font-bold text-emerald-300">{mov.movement_type}</span>
                           <span className="truncate max-w-[200px] text-military-400">{mov.reason}</span>
                           <span className="font-mono text-[10px] text-military-500">
@@ -594,16 +589,14 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                 )}
               </div>
 
-              {/* Botones de Acción de Ciclo de Vida (Sólo ADMIN y SUBADMIN) */}
+              {/* Botones para realizar movimientos inmediatamente desde el escáner */}
               {canPerformActions && (
                 <div className="rounded-2xl border border-military-800 bg-military-900 p-4 space-y-3">
-                  <span className="text-xs font-black uppercase tracking-wider text-military-300 block">
-                    Acciones de Ciclo de Vida en Vivo:
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-400 block">
+                    Realizar Movimiento o Asignación Ahora Mismo:
                   </span>
 
-                  {/* Barra de botones según estado actual */}
                   <div className="flex flex-wrap gap-2">
-                    {/* Botón Asignar (para DISPONIBLE) */}
                     {item.operational_status === 'DISPONIBLE' && (
                       <button
                         onClick={() => setActiveAction(activeAction === 'ASSIGN' ? 'NONE' : 'ASSIGN')}
@@ -618,7 +611,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                       </button>
                     )}
 
-                    {/* Botón Swap / Cambio por otro de bodega (para ASIGNADO) */}
                     {item.operational_status === 'ASIGNADO' && (
                       <button
                         onClick={() => setActiveAction(activeAction === 'SWAP' ? 'NONE' : 'SWAP')}
@@ -633,7 +625,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                       </button>
                     )}
 
-                    {/* Botón Devolver a Bodega (para ASIGNADO) */}
                     {item.operational_status === 'ASIGNADO' && (
                       <button
                         onClick={() => setActiveAction(activeAction === 'RETURN' ? 'NONE' : 'RETURN')}
@@ -648,10 +639,11 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                       </button>
                     )}
 
-                    {/* Botón Dar de Baja (para cualquier estado activo) */}
                     {item.operational_status !== 'DADO_DE_BAJA' && (
                       <button
-                        onClick={() => setActiveAction(activeAction === 'DECOMMISSION' ? 'NONE' : 'DECOMMISSION')}
+                        onClick={() =>
+                          setActiveAction(activeAction === 'DECOMMISSION' ? 'NONE' : 'DECOMMISSION')
+                        }
                         className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-sm ${
                           activeAction === 'DECOMMISSION'
                             ? 'bg-rose-600 text-white'
@@ -659,12 +651,13 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                         }`}
                       >
                         <AlertTriangle className="h-4 w-4" />
-                        <span>Dar de Baja</span>
+                        <span>Dar de Baja / Avería</span>
                       </button>
                     )}
 
-                    {/* Botón Reactivar (para DADO_DE_BAJA o AVERIADO) */}
-                    {(item.operational_status === 'DADO_DE_BAJA' || item.operational_status === 'AVERIADO' || item.operational_status === 'EN_REVISION') && (
+                    {(item.operational_status === 'DADO_DE_BAJA' ||
+                      item.operational_status === 'AVERIADO' ||
+                      item.operational_status === 'EN_REVISION') && (
                       <button
                         onClick={() => setActiveAction(activeAction === 'REACTIVATE' ? 'NONE' : 'REACTIVATE')}
                         className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-sm ${
@@ -679,8 +672,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                     )}
                   </div>
 
-                  {/* FORMULARIO DINÁMICO EN VIVO */}
-                  {/* 1. Formulario ASSIGN */}
                   {activeAction === 'ASSIGN' && (
                     <div className="rounded-xl border border-emerald-500/40 bg-military-950 p-4 space-y-3">
                       <h4 className="text-xs font-bold text-emerald-400 uppercase">
@@ -709,7 +700,7 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                         </label>
                         <input
                           type="text"
-                          placeholder="Ej. Entrega con cargador original y funda protectora"
+                          placeholder="Ej. Entrega con cargador original"
                           value={assignNotes}
                           onChange={(e) => setAssignNotes(e.target.value)}
                           className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
@@ -739,7 +730,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                     </div>
                   )}
 
-                  {/* 2. Formulario SWAP (Sustitución) */}
                   {activeAction === 'SWAP' && (
                     <div className="rounded-xl border border-amber-500/40 bg-military-950 p-4 space-y-3">
                       <h4 className="text-xs font-bold text-amber-400 uppercase">
@@ -761,11 +751,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                             </option>
                           ))}
                         </select>
-                        {availableSwaps.length === 0 && (
-                          <span className="text-[11px] text-amber-400 block mt-1">
-                            No hay otros equipos disponibles en bodega de la categoría {item.category_name}.
-                          </span>
-                        )}
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div>
@@ -805,7 +790,7 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                         <input
                           type="text"
                           required
-                          placeholder="Ej. Falla en teclado y pantalla rota; se reemplaza por equipo de respaldo"
+                          placeholder="Ej. Falla en pantalla; se reemplaza por equipo de bodega"
                           value={swapReason}
                           onChange={(e) => setSwapReason(e.target.value)}
                           className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
@@ -838,15 +823,11 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                     </div>
                   )}
 
-                  {/* 3. Formulario RETURN_TO_WAREHOUSE */}
                   {activeAction === 'RETURN' && (
                     <div className="rounded-xl border border-blue-500/40 bg-military-950 p-4 space-y-3">
                       <h4 className="text-xs font-bold text-blue-400 uppercase">
                         Devolución a Bodega Central
                       </h4>
-                      <p className="text-xs text-military-300">
-                        El activo se desvinculará del custodio actual ({item.employee_name}) y pasará a estado DISPONIBLE en Bodega.
-                      </p>
                       <div>
                         <label className="block text-xs font-bold text-military-300 mb-1">
                           Condición de Recepción Física *
@@ -867,7 +848,7 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                         </label>
                         <input
                           type="text"
-                          placeholder="Ej. Recibido completo y probado en bodega"
+                          placeholder="Ej. Recibido completo en bodega"
                           value={returnNotes}
                           onChange={(e) => setReturnNotes(e.target.value)}
                           className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
@@ -897,15 +878,9 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                     </div>
                   )}
 
-                  {/* 4. Formulario DECOMMISSION */}
                   {activeAction === 'DECOMMISSION' && (
                     <div className="rounded-xl border border-rose-500/40 bg-military-950 p-4 space-y-3">
-                      <h4 className="text-xs font-bold text-rose-400 uppercase">
-                        Dar de Baja Activo
-                      </h4>
-                      <p className="text-xs text-military-300">
-                        El activo se marcará como DADO_DE_BAJA y quedará archivado formalmente en el sistema. Si tenía un custodio, quedará liberado.
-                      </p>
+                      <h4 className="text-xs font-bold text-rose-400 uppercase">Dar de Baja Activo</h4>
                       <div>
                         <label className="block text-xs font-bold text-military-300 mb-1">
                           Condición Física Final
@@ -922,15 +897,15 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-military-300 mb-1">
-                          Motivo o Justificación Obligatoria de Baja *
+                          Motivo Obligatorio de Baja *
                         </label>
                         <textarea
                           rows={2}
                           required
-                          placeholder="Ej. Tarjeta madre quemada por cortocircuito; costo de reparación supera valor residual."
+                          placeholder="Ej. Daño electrónico irreversible"
                           value={decommissionReason}
                           onChange={(e) => setDecommissionReason(e.target.value)}
-                          className="w-full rounded-xl border border-military-700 bg-military-900 p-2 text-xs text-white focus:outline-none focus:border-rose-500"
+                          className="w-full rounded-xl border border-military-700 bg-military-900 p-2 text-xs text-white"
                         />
                       </div>
                       <div className="flex justify-end gap-2 pt-2">
@@ -957,7 +932,6 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                     </div>
                   )}
 
-                  {/* 5. Formulario REACTIVATE */}
                   {activeAction === 'REACTIVATE' && (
                     <div className="rounded-xl border border-emerald-500/40 bg-military-950 p-4 space-y-3">
                       <h4 className="text-xs font-bold text-emerald-400 uppercase">
@@ -1000,7 +974,7 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
                         </label>
                         <input
                           type="text"
-                          placeholder="Ej. Se reemplazó módulo defectuoso; equipo 100% operativo"
+                          placeholder="Ej. Equipo reparado y 100% operativo"
                           value={reactivateNotes}
                           onChange={(e) => setReactivateNotes(e.target.value)}
                           className="w-full rounded-xl border border-military-700 bg-military-900 px-3 py-2 text-xs text-white"
@@ -1039,7 +1013,7 @@ export default function QrScannerModal({ isOpen, onClose, currentUser }: QrScann
         {/* Pie del Modal */}
         <div className="border-t border-military-800 bg-military-900 px-5 py-3 flex items-center justify-between text-xs">
           <span className="text-military-400 font-mono text-[11px]">
-            {canPerformActions ? 'Rol con permisos de edición activos' : 'Modo sólo lectura'}
+            Escáner conectado a Bodega y Movimientos
           </span>
           <button
             onClick={() => {

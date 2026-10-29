@@ -4,10 +4,11 @@ import { getCurrentUser } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
 
 export const DEFAULT_LEGAL_NOTICE =
-  'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado en su correo electrónico. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.';
+  'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.';
 
 export const DEFAULT_ISSUER_NAME = 'Alexander Turcios Melendez';
-export const DEFAULT_ISSUER_ROLE = 'Jefe de IT / Administración de Inventario';
+export const DEFAULT_ISSUER_ROLE =
+  'Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)';
 
 async function getIssuerConfig() {
   const rows = await query<{ key: string; value: string }>(
@@ -17,9 +18,15 @@ async function getIssuerConfig() {
   for (const r of rows) {
     map[r.key] = r.value;
   }
+  const rawRole = map['acta_issuer_role'];
+  const effectiveRole =
+    !rawRole || rawRole === 'Jefe de IT / Administración de Inventario'
+      ? DEFAULT_ISSUER_ROLE
+      : rawRole;
+
   return {
     issuerName: map['acta_issuer_name'] || DEFAULT_ISSUER_NAME,
-    issuerRole: map['acta_issuer_role'] || DEFAULT_ISSUER_ROLE,
+    issuerRole: effectiveRole,
     issuerSignature: map['acta_issuer_signature'] || '',
   };
 }
@@ -170,35 +177,56 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2. Crear nueva Acta Digital de Entrega o Acta de Cambio de Dispositivo
+    // 2. Crear nueva Acta Digital de Entrega, Cambio de Dispositivo o Devolución/Baja
     const {
-      actaType = 'ENTREGA_INICIAL', // 'ENTREGA_INICIAL' | 'CAMBIO_EQUIPO' | 'DEVOLUCION'
+      actaType = 'ENTREGA_INICIAL', // 'ENTREGA_INICIAL' | 'CAMBIO_EQUIPO' | 'DEVOLUCION_BAJA'
       employeeId,
       employeeName,
       employeeDpi,
       employeeCode,
       employeeEmail,
       employeePhone,
+      departmentId,
       departmentName,
       supervisorName,
       items = [],
       replacedItem = null,
       notes,
+      internalAdminNotes,
+      refusedToSign = false,
+      returnedCondition = '',
+      movementId = null,
       employeeSignatureData, // Opcional si firma en el mismo momento en el celular del administrador
     } = body;
 
     if (!employeeName || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
-        { error: 'Debe indicar el empleado y al menos un dispositivo a entregar.' },
+        { error: 'Debe indicar el empleado y al menos un dispositivo o licencia.' },
         { status: 400 }
       );
     }
 
     const issuerConfig = await getIssuerConfig();
 
-    // Si se proporcionó DPI y el empleado existe, actualizar su DPI en la tabla employees
-    if (employeeId && employeeDpi && String(employeeDpi).trim()) {
-      await run(`UPDATE employees SET dpi = ? WHERE id = ?`, [String(employeeDpi).trim(), employeeId]);
+    // Sincronizar información del empleado en la tabla employees si se editó en el modal
+    if (employeeId) {
+      await run(
+        `UPDATE employees
+         SET full_name = COALESCE(?, full_name),
+             dpi = COALESCE(?, dpi),
+             email = COALESCE(?, email),
+             phone = COALESCE(?, phone),
+             department_id = COALESCE(?, department_id)
+         WHERE id = ?`,
+        [
+          employeeName ? String(employeeName).trim() : null,
+          employeeDpi ? String(employeeDpi).trim() : null,
+          employeeEmail ? String(employeeEmail).trim() : null,
+          employeePhone ? String(employeePhone).trim() : null,
+          departmentId || null,
+          employeeId,
+        ]
+      );
     }
 
     // Generar código correlativo único ACTA-2026-XXXX
@@ -211,6 +239,11 @@ export async function POST(req: NextRequest) {
     const nowIso = new Date().toISOString();
 
     const isSignedImmediately = Boolean(employeeSignatureData && employeeSignatureData.startsWith('data:image'));
+    const finalStatus = isSignedImmediately
+      ? 'FIRMADA'
+      : refusedToSign
+      ? 'NO_QUISO_FIRMAR'
+      : 'PENDIENTE_FIRMA';
 
     await run(
       `INSERT INTO delivery_actas (
@@ -218,8 +251,9 @@ export async function POST(req: NextRequest) {
         employee_dpi, employee_email, employee_phone, department_name, supervisor_name,
         delivered_by_name, delivered_by_role, delivered_by_signature,
         items_json, replaced_item_json, delivery_date, status,
-        employee_signature_data, signed_at, public_token, legal_notice, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        employee_signature_data, signed_at, public_token, legal_notice, notes,
+        refused_to_sign, returned_condition, internal_admin_notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         actaId,
         actaCode,
@@ -238,24 +272,72 @@ export async function POST(req: NextRequest) {
         JSON.stringify(items),
         replacedItem ? JSON.stringify(replacedItem) : null,
         nowIso,
-        isSignedImmediately ? 'FIRMADA' : 'PENDIENTE_FIRMA',
+        finalStatus,
         isSignedImmediately ? employeeSignatureData : null,
         isSignedImmediately ? nowIso : null,
         publicToken,
         DEFAULT_LEGAL_NOTICE,
         notes || null,
+        refusedToSign ? 1 : 0,
+        returnedCondition || null,
+        internalAdminNotes || null,
       ]
     );
+
+    // Si viene vinculada desde un movimiento en /movimientos, actualizar el movimiento
+    if (movementId) {
+      await run(
+        `UPDATE inventory_movements
+         SET requires_acta = 1, acta_id = ?, acta_code = ?, acta_status = ?
+         WHERE id = ?`,
+        [actaId, actaCode, finalStatus, movementId]
+      );
+    } else if (actaType === 'CAMBIO_EQUIPO' || actaType === 'DEVOLUCION_BAJA') {
+      // Conectar automáticamente Acta de Cambio o Devolución con Entradas y Movimientos
+      const movId = `mov-${Date.now()}`;
+      const firstItem = items[0] || {};
+      const movReason =
+        actaType === 'CAMBIO_EQUIPO'
+          ? `Acta de Cambio (${actaCode}): Se reemplazó [${replacedItem?.code || 'Anterior'} - ${replacedItem?.name || ''}] por [${firstItem.code || ''} - ${firstItem.name || ''}] para ${employeeName}`
+          : `Acta de Devolución / Baja (${actaCode}): Recepción de ${items.length} equipo(s) de ${employeeName}. Estado: ${returnedCondition || 'Revisado'}${refusedToSign ? ' (Colaborador no quiso firmar)' : ''}`;
+
+      await run(
+        `INSERT INTO inventory_movements (
+          id, movement_type, product_id, quantity, unit_cost, total_cost,
+          to_employee_id, recipient_name, requires_acta, acta_id, acta_code, acta_status,
+          reason, reference_code, user_id, created_at
+        ) VALUES (?, ?, ?, ?, 0, 0, ?, ?, 1, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          movId,
+          actaType === 'CAMBIO_EQUIPO' ? 'ASIGNACION' : 'DEVOLUCION',
+          firstItem.productId || null,
+          Number(firstItem.quantity) || items.length || 1,
+          employeeId || null,
+          employeeName.trim(),
+          actaId,
+          actaCode,
+          finalStatus,
+          movReason,
+          actaCode,
+          user.id,
+        ]
+      );
+    }
 
     await logAudit({
       userId: user.id,
       username: user.username,
       userRole: user.role,
-      action: actaType === 'CAMBIO_EQUIPO' ? 'CREAR_ACTA_CAMBIO' : 'CREAR_ACTA_ENTREGA',
+      action:
+        actaType === 'CAMBIO_EQUIPO'
+          ? 'CREAR_ACTA_CAMBIO'
+          : actaType === 'DEVOLUCION_BAJA'
+          ? 'CREAR_ACTA_DEVOLUCION'
+          : 'CREAR_ACTA_ENTREGA',
       module: 'ASIGNACIONES',
       entityId: actaId,
       entityName: `${actaCode} - ${employeeName}`,
-      reason: `Generación de acta digital (${actaType}) con ${items.length} dispositivo(s). Entregado por ${issuerConfig.issuerName}`,
+      reason: `Generación de acta digital (${actaType}) con ${items.length} ítem(s). Entregado por ${issuerConfig.issuerName}`,
     });
 
     return NextResponse.json({
@@ -263,6 +345,7 @@ export async function POST(req: NextRequest) {
       actaId,
       actaCode,
       publicToken,
+      status: finalStatus,
       message: `Acta digital ${actaCode} generada exitosamente.`,
     });
   } catch (error: any) {
@@ -318,6 +401,12 @@ export async function PUT(req: NextRequest) {
     if (acta.employee_id && finalDpi) {
       await run(`UPDATE employees SET dpi = ? WHERE id = ?`, [finalDpi, acta.employee_id]);
     }
+
+    // Sincronizar estado de acta en movimientos si está conectada
+    await run(
+      `UPDATE inventory_movements SET acta_status = 'FIRMADA' WHERE acta_id = ? OR acta_code = ?`,
+      [acta.id, acta.acta_code]
+    );
 
     return NextResponse.json({
       success: true,

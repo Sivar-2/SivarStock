@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   Globe,
   Plus,
@@ -18,13 +19,17 @@ import {
   Trash2,
   Download,
   FileText,
-  Briefcase,
   Phone,
   Mail,
+  RefreshCw,
+  FileSignature,
+  Share2,
+  Printer,
+  User,
 } from 'lucide-react';
 import { generateExcelBuffer, generatePdfDoc } from '@/lib/export';
 
-const CONTRACT_TYPE_LABELS: Record<string, string> = {
+const DEFAULT_CONTRACT_TYPE_LABELS: Record<string, string> = {
   LICENCIA_SAAS: 'Licencia / Software SaaS',
   CONTRATO_PROVEEDOR: 'Contrato con Proveedor',
   ENLACE_INTERNET: 'Enlace Internet / Telecom',
@@ -37,6 +42,8 @@ export default function ServiciosDigitalesPage() {
   const [services, setServices] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [contractTypes, setContractTypes] = useState<Record<string, string>>(DEFAULT_CONTRACT_TYPE_LABELS);
   const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState('');
@@ -44,21 +51,23 @@ export default function ServiciosDigitalesPage() {
   const [selectedContractType, setSelectedContractType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
 
-  // Modal Crear / Editar Servicio o Contrato con Proveedor
+  // Modal Crear / Editar / Renovar Servicio o Contrato con Proveedor
   const [showServiceModal, setShowServiceModal] = useState(false);
   const [editingService, setEditingService] = useState<any | null>(null);
+  const [isRenewalMode, setIsRenewalMode] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     categoryId: '',
     provider: '',
     contractNumber: '',
-    contractType: 'CONTRATO_PROVEEDOR',
+    contractType: 'LICENCIA_SAAS',
     contactName: '',
     contactPhone: '',
     contactEmail: '',
     slaTerms: '',
     responsibleDepartmentId: '',
     chargedDepartmentId: '',
+    assignedEmployeeId: '',
     planType: '',
     seatsContracted: '1',
     seatsUsed: '1',
@@ -67,16 +76,19 @@ export default function ServiciosDigitalesPage() {
     currency: 'GTQ',
     startDate: new Date().toISOString().split('T')[0],
     expirationDate: '',
+    noExpiration: false,
     autoRenew: 'SI',
     status: 'ACTIVA',
     assignedUsersText: '',
+    requiresActa: false,
     notes: '',
   });
 
-  // Modal Tuerca: Gestionar Categorías
+  // Modal Ajustes: Gestionar Categorías y Tipos de Registro (Agregar y Eliminar)
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryDesc, setNewCategoryDesc] = useState('');
+  const [newContractTypeName, setNewContractTypeName] = useState('');
 
   const fetchData = async () => {
     setLoading(true);
@@ -92,6 +104,8 @@ export default function ServiciosDigitalesPage() {
       setServices(data.services || []);
       setCategories(data.categories || []);
       setDepartments(data.departments || []);
+      setEmployees(data.employees || []);
+      if (data.contractTypes) setContractTypes(data.contractTypes);
     } catch (e) {
       console.error('Error cargando servicios y contratos:', e);
     } finally {
@@ -103,8 +117,9 @@ export default function ServiciosDigitalesPage() {
     fetchData();
   }, [selectedCategoryId, selectedContractType, filterStatus]);
 
-  const handleOpenCreate = (defaultType = 'CONTRATO_PROVEEDOR') => {
+  const handleOpenCreate = (defaultType = 'LICENCIA_SAAS') => {
     setEditingService(null);
+    setIsRenewalMode(false);
     setFormData({
       name: '',
       categoryId: categories[0]?.id || '',
@@ -117,6 +132,7 @@ export default function ServiciosDigitalesPage() {
       slaTerms: '',
       responsibleDepartmentId: '',
       chargedDepartmentId: '',
+      assignedEmployeeId: '',
       planType: '',
       seatsContracted: '1',
       seatsUsed: '1',
@@ -125,16 +141,19 @@ export default function ServiciosDigitalesPage() {
       currency: 'GTQ',
       startDate: new Date().toISOString().split('T')[0],
       expirationDate: '',
+      noExpiration: false,
       autoRenew: 'SI',
       status: 'ACTIVA',
       assignedUsersText: '',
+      requiresActa: false,
       notes: '',
     });
     setShowServiceModal(true);
   };
 
-  const handleOpenEdit = (srv: any) => {
+  const handleOpenEdit = (srv: any, renewal = false) => {
     setEditingService(srv);
+    setIsRenewalMode(renewal);
     setFormData({
       name: srv.name || '',
       categoryId: srv.category_id || '',
@@ -147,17 +166,20 @@ export default function ServiciosDigitalesPage() {
       slaTerms: srv.sla_terms || '',
       responsibleDepartmentId: srv.responsible_department_id || '',
       chargedDepartmentId: srv.charged_department_id || '',
+      assignedEmployeeId: srv.assigned_employee_id || '',
       planType: srv.plan_type || '',
       seatsContracted: String(srv.seats_contracted || 1),
       seatsUsed: String(srv.seats_used || 1),
       costPeriod: srv.cost_period || 'MENSUAL',
       amount: String(srv.amount || 0),
       currency: srv.currency || 'GTQ',
-      startDate: srv.start_date || '',
+      startDate: renewal ? new Date().toISOString().split('T')[0] : srv.start_date || '',
       expirationDate: srv.expiration_date || '',
+      noExpiration: Boolean(srv.no_expiration),
       autoRenew: srv.auto_renew || 'SI',
-      status: srv.status || 'ACTIVA',
+      status: renewal ? 'ACTIVA' : srv.status || 'ACTIVA',
       assignedUsersText: srv.assigned_users_text || '',
+      requiresActa: false,
       notes: srv.notes || '',
     });
     setShowServiceModal(true);
@@ -166,7 +188,9 @@ export default function ServiciosDigitalesPage() {
   const handleSaveService = async (e: React.FormEvent) => {
     e.preventDefault();
     const method = editingService ? 'PUT' : 'POST';
-    const payload = editingService ? { id: editingService.id, ...formData } : formData;
+    const payload = editingService
+      ? { id: editingService.id, ...formData, isRenewal: isRenewalMode }
+      : formData;
 
     const res = await fetch('/api/digital-services', {
       method,
@@ -181,7 +205,7 @@ export default function ServiciosDigitalesPage() {
   };
 
   const handleDeleteService = async (srv: any) => {
-    if (!window.confirm(`¿Desea eliminar el contrato / servicio "${srv.name}" con proveedor ${srv.provider}?`)) return;
+    if (!window.confirm(`¿Desea eliminar el contrato / licencia "${srv.name}" con proveedor ${srv.provider}?`)) return;
     const res = await fetch(`/api/digital-services?id=${srv.id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchData();
@@ -207,7 +231,49 @@ export default function ServiciosDigitalesPage() {
     }
   };
 
-  // Totales financieros por moneda
+  const handleDeleteCategory = async (catId: string, catName: string) => {
+    if (!window.confirm(`¿Eliminar la categoría "${catName}"?`)) return;
+    const res = await fetch('/api/digital-services', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'DELETE_CATEGORY',
+        categoryIdToDelete: catId,
+      }),
+    });
+    if (res.ok) fetchData();
+  };
+
+  const handleAddContractType = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newContractTypeName.trim()) return;
+    const res = await fetch('/api/digital-services', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'ADD_CONTRACT_TYPE',
+        typeLabel: newContractTypeName.trim(),
+      }),
+    });
+    if (res.ok) {
+      setNewContractTypeName('');
+      fetchData();
+    }
+  };
+
+  const handleDeleteContractType = async (key: string, label: string) => {
+    if (!window.confirm(`¿Eliminar el tipo de registro "${label}"?`)) return;
+    const res = await fetch('/api/digital-services', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'DELETE_CONTRACT_TYPE',
+        typeKey: key,
+      }),
+    });
+    if (res.ok) fetchData();
+  };
+
   const totalGtqMonthly = services
     .filter((s) => s.status === 'ACTIVA' && s.currency === 'GTQ')
     .reduce((acc, s) => acc + (s.monthly_equivalent_cost || 0), 0);
@@ -217,16 +283,15 @@ export default function ServiciosDigitalesPage() {
     .reduce((acc, s) => acc + (s.monthly_equivalent_cost || 0), 0);
 
   const expiringContractsCount = services.filter(
-    (s) => s.days_until_expiration !== null && s.days_until_expiration <= 45
+    (s) => !s.no_expiration && s.days_until_expiration !== null && s.days_until_expiration <= 45
   ).length;
 
   const exportColumns = [
     { key: 'contract_type', header: 'Tipo de Contrato' },
     { key: 'contract_number', header: 'No. Contrato' },
-    { key: 'name', header: 'Servicio / Objeto del Contrato' },
+    { key: 'name', header: 'Servicio / Licencia' },
     { key: 'provider', header: 'Proveedor' },
-    { key: 'contact_name', header: 'Contacto Proveedor' },
-    { key: 'contact_phone', header: 'Teléfono Proveedor' },
+    { key: 'assigned_employee_name', header: 'Empleado Asignado' },
     { key: 'cost_period', header: 'Ciclo' },
     { key: 'currency', header: 'Moneda' },
     { key: 'amount', header: 'Importe' },
@@ -248,7 +313,7 @@ export default function ServiciosDigitalesPage() {
   const handleExportPdf = () => {
     const doc = generatePdfDoc(
       'Control de Contratos con Proveedores, Licencias y Servicios',
-      'Vencimiento de Contratos, SLA, Proveedores y Costos en Quetzales (Q) y Dólares ($)',
+      'Vencimiento de Contratos, Licencias con/sin renovación y Actas Digitales',
       exportColumns,
       services
     );
@@ -262,10 +327,10 @@ export default function ServiciosDigitalesPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2.5">
             <Globe className="h-7 w-7 text-military-700" />
-            Contratos con Proveedores, Licencias y Servicios Digitales
+            Licencias y Contratos
           </h1>
           <p className="text-sm text-slate-500">
-            Control de vencimiento de contratos con proveedores (Internet, Arrendamiento, Soporte), licencias SaaS y dominios en Quetzales (Q) o Dólares ($).
+            Control de licencias asignadas a personal (con o sin renovación), contratos con proveedores y generación de Actas Digitales en asignación o renovación.
           </p>
         </div>
 
@@ -285,15 +350,15 @@ export default function ServiciosDigitalesPage() {
           <button
             onClick={() => setShowCategoryModal(true)}
             className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 shadow-sm"
-            title="Configurar Categorías"
+            title="Agregar o eliminar Categorías y Tipos de Registro"
           >
-            <Settings className="h-4 w-4 text-military-700" /> Categorías
+            <Settings className="h-4 w-4 text-military-700" /> Ajustes
           </button>
           <button
-            onClick={() => handleOpenCreate('CONTRATO_PROVEEDOR')}
+            onClick={() => handleOpenCreate('LICENCIA_SAAS')}
             className="flex items-center gap-2 rounded-xl bg-military-700 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-military-800 transition"
           >
-            <Plus className="h-4 w-4" /> Nuevo Contrato / Licencia
+            <Plus className="h-4 w-4" /> Nueva Licencia / Contrato
           </button>
         </div>
       </div>
@@ -314,7 +379,7 @@ export default function ServiciosDigitalesPage() {
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4 shadow-sm">
           <span className="text-xs font-bold uppercase text-amber-800 flex items-center justify-between">
-            <span>Contratos por Vencer / Vencidos</span>
+            <span>Por Vencer / Vencidos</span>
             <AlertTriangle className="h-4 w-4 text-amber-600" />
           </span>
           <div className="mt-1 text-2xl font-black text-amber-900">{expiringContractsCount}</div>
@@ -322,9 +387,9 @@ export default function ServiciosDigitalesPage() {
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <span className="text-xs font-bold uppercase text-slate-400">Total Contratos y Licencias</span>
+          <span className="text-xs font-bold uppercase text-slate-400">Total Licencias y Contratos</span>
           <div className="mt-1 text-2xl font-black text-military-800">{services.length}</div>
-          <span className="text-[11px] text-slate-500">Proveedores y licencias activas</span>
+          <span className="text-[11px] text-slate-500">Con control de renovación y actas</span>
         </div>
       </div>
 
@@ -340,7 +405,7 @@ export default function ServiciosDigitalesPage() {
         >
           Todos ({services.length})
         </button>
-        {Object.entries(CONTRACT_TYPE_LABELS).map(([key, label]) => (
+        {Object.entries(contractTypes).map(([key, label]) => (
           <button
             key={key}
             onClick={() => setSelectedContractType(key)}
@@ -361,7 +426,7 @@ export default function ServiciosDigitalesPage() {
           <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar por Proveedor, No. Contrato, Servicio, Contacto o Usuario..."
+            placeholder="Buscar por Licencia, Proveedor, Empleado asignado, No. Contrato..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && fetchData()}
@@ -377,7 +442,7 @@ export default function ServiciosDigitalesPage() {
           <option value="">Todos los Estados</option>
           <option value="ACTIVA">ACTIVA / VIGENTE</option>
           <option value="GRATUITA">GRATUITA</option>
-          <option value="PAGO_UNICO">PAGO ÚNICO</option>
+          <option value="PAGO_UNICO">PAGO ÚNICO / PERPETUA</option>
           <option value="CADUCADA_INACTIVA">CADUCADA / VENCIDA</option>
         </select>
 
@@ -389,18 +454,18 @@ export default function ServiciosDigitalesPage() {
         </button>
       </div>
 
-      {/* Tabla de Contratos con Proveedores y Servicios */}
+      {/* Tabla de Contratos con Proveedores y Licencias */}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase text-slate-600">
+            <thead className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold uppercase text-slate-600">
               <tr>
-                <th className="px-4 py-3.5">Contrato / Servicio</th>
+                <th className="px-4 py-3.5">Licencia / Contrato</th>
                 <th className="px-4 py-3.5">Proveedor y Contacto</th>
-                <th className="px-4 py-3.5">Área / Alcance</th>
+                <th className="px-4 py-3.5">Empleado / Área Asignada</th>
                 <th className="px-4 py-3.5">Costo y Ciclo</th>
-                <th className="px-4 py-3.5">Vencimiento Contrato</th>
-                <th className="px-4 py-3.5">Estado</th>
+                <th className="px-4 py-3.5">Vencimiento / Renovación</th>
+                <th className="px-4 py-3.5">Acta Digital</th>
                 <th className="px-4 py-3.5 text-right">Acciones</th>
               </tr>
             </thead>
@@ -408,46 +473,40 @@ export default function ServiciosDigitalesPage() {
               {loading ? (
                 <tr>
                   <td colSpan={7} className="py-10 text-center text-slate-400">
-                    Cargando contratos con proveedores y licencias...
+                    Cargando licencias y contratos...
                   </td>
                 </tr>
               ) : services.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-10 text-center text-slate-400">
-                    No hay contratos ni servicios registrados con estos filtros.
+                    No hay licencias ni contratos registrados con estos filtros.
                   </td>
                 </tr>
               ) : (
                 services.map((s) => {
                   const sym = s.currency === 'USD' ? '$' : 'Q';
                   const days = s.days_until_expiration;
-                  const isExpiringSoon = days !== null && days >= 0 && days <= 45;
-                  const isExpired = days !== null && days < 0;
+                  const isExpiringSoon = !s.no_expiration && days !== null && days >= 0 && days <= 45;
+                  const isExpired = !s.no_expiration && days !== null && days < 0;
 
                   return (
                     <tr key={s.id} className="hover:bg-slate-50/80 transition">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           <span className="rounded bg-military-50 px-2 py-0.5 text-[10px] font-bold text-military-800 border border-military-200">
-                            {CONTRACT_TYPE_LABELS[s.contract_type] || s.category_name || 'Contrato / Licencia'}
+                            {contractTypes[s.contract_type] || s.category_name || 'Licencia / Contrato'}
                           </span>
                           {s.contract_number && (
-                            <span className="font-mono text-[11px] font-bold text-slate-600">
-                              #{s.contract_number}
-                            </span>
+                            <span className="font-mono text-[11px] font-bold text-slate-600">#{s.contract_number}</span>
                           )}
                         </div>
                         <div className="font-bold text-slate-900 mt-1">{s.name}</div>
-                        {s.sla_terms && (
-                          <div className="text-[11px] text-slate-500 mt-0.5">SLA: {s.sla_terms}</div>
-                        )}
+                        {s.sla_terms && <div className="text-[11px] text-slate-500 mt-0.5">SLA: {s.sla_terms}</div>}
                       </td>
 
                       <td className="px-4 py-3">
                         <div className="font-semibold text-slate-800">{s.provider}</div>
-                        {s.contact_name && (
-                          <div className="text-xs text-slate-500">{s.contact_name}</div>
-                        )}
+                        {s.contact_name && <div className="text-xs text-slate-500">{s.contact_name}</div>}
                         <div className="flex flex-wrap gap-2 text-[11px] text-slate-500 mt-0.5">
                           {s.contact_phone && (
                             <span className="flex items-center gap-0.5">
@@ -463,7 +522,13 @@ export default function ServiciosDigitalesPage() {
                       </td>
 
                       <td className="px-4 py-3 text-xs">
-                        <div className="font-semibold text-slate-700 flex items-center gap-1">
+                        {s.assigned_employee_name ? (
+                          <div className="font-bold text-indigo-800 flex items-center gap-1">
+                            <User className="h-3.5 w-3.5 text-indigo-600" />
+                            {s.assigned_employee_name}
+                          </div>
+                        ) : null}
+                        <div className="font-semibold text-slate-700 flex items-center gap-1 mt-0.5">
                           <Building2 className="h-3.5 w-3.5 text-slate-400" />
                           {s.charged_department_name || s.responsible_department_name || 'General'}
                         </div>
@@ -479,7 +544,8 @@ export default function ServiciosDigitalesPage() {
                         ) : (
                           <div>
                             <div className="font-bold text-slate-900">
-                              {sym} {Number(s.amount || 0).toFixed(2)} <span className="text-[10px] text-slate-500">{s.currency}</span>
+                              {sym} {Number(s.amount || 0).toFixed(2)}{' '}
+                              <span className="text-[10px] text-slate-500">{s.currency}</span>
                             </div>
                             <span className="text-[11px] text-slate-500">{s.cost_period}</span>
                           </div>
@@ -487,7 +553,11 @@ export default function ServiciosDigitalesPage() {
                       </td>
 
                       <td className="px-4 py-3 text-xs">
-                        {s.expiration_date ? (
+                        {s.no_expiration ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-bold text-indigo-800 border border-indigo-200">
+                            Sin renovación / Perpetua
+                          </span>
+                        ) : s.expiration_date ? (
                           <div>
                             <div className="font-medium text-slate-800 flex items-center gap-1">
                               <Calendar className="h-3.5 w-3.5 text-slate-400" />
@@ -508,33 +578,57 @@ export default function ServiciosDigitalesPage() {
                             )}
                           </div>
                         ) : (
-                          <span className="text-slate-400 italic">Sin vencimiento / Indefinido</span>
+                          <span className="text-slate-400 italic">Sin fecha definida</span>
                         )}
                       </td>
 
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                            s.status === 'ACTIVA'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : s.status === 'GRATUITA'
-                              ? 'bg-sky-100 text-sky-800'
-                              : s.status === 'PAGO_UNICO'
-                              ? 'bg-purple-100 text-purple-800'
-                              : 'bg-rose-100 text-rose-800'
-                          }`}
-                        >
-                          {s.status === 'ACTIVA' && <CheckCircle2 className="h-3 w-3" />}
-                          {s.status === 'CADUCADA_INACTIVA' && <XCircle className="h-3 w-3" />}
-                          {s.status === 'PAGO_UNICO' && <Clock className="h-3 w-3" />}
-                          {s.status}
-                        </span>
+                      <td className="px-4 py-3 text-xs">
+                        {s.acta_code ? (
+                          <div className="space-y-1">
+                            <span className="font-mono font-bold text-slate-900 block">{s.acta_code}</span>
+                            <div className="flex items-center gap-1">
+                              <Link
+                                href={`/acta/${s.acta_code}?token=${s.acta_token || ''}`}
+                                target="_blank"
+                                className="inline-flex items-center gap-1 rounded bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-slate-800"
+                              >
+                                <Printer className="h-2.5 w-2.5" /> PDF
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const url = `${window.location.origin}/acta/${s.acta_code}?token=${s.acta_token || ''}`;
+                                  const phone = (s.assigned_employee_phone || '').replace(/[^0-9]/g, '');
+                                  const text = `Hola *${s.assigned_employee_name || 'Colaborador'}*, te enviamos el Acta Digital *${s.acta_code}* por tu licencia *${s.name}* en Fábrica de Persianas y Complementos, S.A.:\n${url}`;
+                                  window.open(
+                                    phone
+                                      ? `https://wa.me/${phone.startsWith('502') ? phone : `502${phone}`}?text=${encodeURIComponent(text)}`
+                                      : `https://wa.me/?text=${encodeURIComponent(text)}`,
+                                    '_blank'
+                                  );
+                                }}
+                                className="inline-flex items-center gap-1 rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-emerald-700"
+                              >
+                                <Share2 className="h-2.5 w-2.5" /> WA
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">Sin acta</span>
+                        )}
                       </td>
 
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
-                            onClick={() => handleOpenEdit(s)}
+                            onClick={() => handleOpenEdit(s, true)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100"
+                            title="Renovar licencia o contrato (permite elegir si enviar nueva Acta)"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5 text-emerald-700" /> Renovar
+                          </button>
+                          <button
+                            onClick={() => handleOpenEdit(s, false)}
                             className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                           >
                             <Edit3 className="h-3.5 w-3.5 text-military-700" /> Editar
@@ -557,13 +651,17 @@ export default function ServiciosDigitalesPage() {
         </div>
       </div>
 
-      {/* Modal Crear / Editar Servicio o Contrato con Proveedor */}
+      {/* Modal Crear / Editar / Renovar Licencia o Contrato */}
       {showServiceModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <h2 className="text-lg font-bold text-slate-900">
-                {editingService ? 'Editar Contrato con Proveedor / Licencia' : 'Registrar Nuevo Contrato con Proveedor o Licencia'}
+                {isRenewalMode
+                  ? `Renovar Licencia / Contrato: ${editingService?.name}`
+                  : editingService
+                  ? 'Editar Contrato con Proveedor / Licencia'
+                  : 'Registrar Nueva Licencia o Contrato con Proveedor'}
               </h2>
               <button onClick={() => setShowServiceModal(false)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100">
                 <X className="h-5 w-5" />
@@ -579,8 +677,10 @@ export default function ServiciosDigitalesPage() {
                     onChange={(e) => setFormData({ ...formData, contractType: e.target.value })}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold"
                   >
-                    {Object.entries(CONTRACT_TYPE_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
+                    {Object.entries(contractTypes).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -605,7 +705,9 @@ export default function ServiciosDigitalesPage() {
                   >
                     <option value="">-- General --</option>
                     {categories.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -613,11 +715,13 @@ export default function ServiciosDigitalesPage() {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Nombre del Contrato / Servicio / Dominio *</label>
+                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
+                    Nombre de la Licencia / Contrato / Servicio *
+                  </label>
                   <input
                     type="text"
                     required
-                    placeholder="Ej. Enlace Dedicado Fibra 200Mbps / Arrendamiento Impresoras / Microsoft 365"
+                    placeholder="Ej. Licencia Microsoft 365 Business / Enlace Fibra / Antivirus"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
@@ -629,7 +733,7 @@ export default function ServiciosDigitalesPage() {
                   <input
                     type="text"
                     required
-                    placeholder="Ej. Tigo Business, Claro, PBS Guatemala, GoDaddy..."
+                    placeholder="Ej. Microsoft, Claro, PBS Guatemala, Adobe..."
                     value={formData.provider}
                     onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
@@ -637,53 +741,70 @@ export default function ServiciosDigitalesPage() {
                 </div>
               </div>
 
-              {/* Datos de Contacto del Proveedor y SLA */}
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-                <h3 className="text-xs font-bold uppercase text-slate-600">
-                  Contacto del Proveedor y Condiciones del Contrato (SLA)
-                </h3>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {/* Asignación a Empleado y Opción de Generar Acta Digital */}
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Ejecutivo / Contacto</label>
-                    <input
-                      type="text"
-                      placeholder="Nombre del asesor o soporte"
-                      value={formData.contactName}
-                      onChange={(e) => setFormData({ ...formData, contactName: e.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    />
+                    <label className="block text-xs font-bold text-indigo-950 mb-1">
+                      Empleado Asignado a esta Licencia (Opcional)
+                    </label>
+                    <select
+                      value={formData.assignedEmployeeId}
+                      onChange={(e) => {
+                        const emp = employees.find((x) => x.id === e.target.value);
+                        setFormData({
+                          ...formData,
+                          assignedEmployeeId: e.target.value,
+                          assignedUsersText: emp ? `${emp.full_name} (${emp.email || emp.employee_code})` : formData.assignedUsersText,
+                        });
+                      }}
+                      className="w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm"
+                    >
+                      <option value="">-- Licencia General de Área / Múltiples Usuarios --</option>
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.full_name} ({emp.employee_code})
+                        </option>
+                      ))}
+                    </select>
                   </div>
+
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Teléfono Soporte / Proveedor</label>
-                    <input
-                      type="text"
-                      placeholder="+502 2428-0000"
-                      value={formData.contactPhone}
-                      onChange={(e) => setFormData({ ...formData, contactPhone: e.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Correo Proveedor</label>
-                    <input
-                      type="email"
-                      placeholder="soporte@proveedor.com"
-                      value={formData.contactEmail}
-                      onChange={(e) => setFormData({ ...formData, contactEmail: e.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    />
+                    <label className="block text-xs font-bold text-indigo-950 mb-1">Departamento / Área Imputada</label>
+                    <select
+                      value={formData.chargedDepartmentId}
+                      onChange={(e) => setFormData({ ...formData, chargedDepartmentId: e.target.value })}
+                      className="w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-sm"
+                    >
+                      <option value="">-- General --</option>
+                      {departments.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">SLA / Términos de Renovación o Penalización</label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer pt-1">
                   <input
-                    type="text"
-                    placeholder="Ej. Contrato forzoso 24 meses, preaviso de 30 días antes del vencimiento, soporte 24/7..."
-                    value={formData.slaTerms}
-                    onChange={(e) => setFormData({ ...formData, slaTerms: e.target.value })}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    type="checkbox"
+                    checked={formData.requiresActa}
+                    onChange={(e) => setFormData({ ...formData, requiresActa: e.target.checked })}
+                    className="mt-0.5 h-4 w-4 rounded border-indigo-300 text-indigo-600"
                   />
-                </div>
+                  <div>
+                    <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                      <FileSignature className="h-4 w-4 text-indigo-700" />
+                      {isRenewalMode
+                        ? '¿Desea generar y enviar una nueva Acta Digital por esta Renovación?'
+                        : '¿Generar Acta Digital de Entrega para firma del empleado receptor?'}
+                    </span>
+                    <span className="text-[11px] text-indigo-800 block">
+                      Si lo marcas, se generará el Acta Oficial de 2 páginas lista para enviar por WhatsApp o Correo.
+                    </span>
+                  </div>
+                </label>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -696,7 +817,7 @@ export default function ServiciosDigitalesPage() {
                   >
                     <option value="MENSUAL">MENSUAL</option>
                     <option value="ANUAL">ANUAL</option>
-                    <option value="UNICO">PAGO ÚNICO</option>
+                    <option value="UNICO">PAGO ÚNICO / PERPETUA</option>
                     <option value="GRATUITO">GRATUITO (Costo 0)</option>
                   </select>
                 </div>
@@ -726,23 +847,9 @@ export default function ServiciosDigitalesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
-                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Estado *</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  >
-                    <option value="ACTIVA">ACTIVA / VIGENTE</option>
-                    <option value="GRATUITA">GRATUITA</option>
-                    <option value="PAGO_UNICO">PAGO ÚNICO</option>
-                    <option value="CADUCADA_INACTIVA">CADUCADA / VENCIDA</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Inicio de Contrato</label>
+                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Inicio / Renovación</label>
                   <input
                     type="date"
                     value={formData.startDate}
@@ -755,53 +862,67 @@ export default function ServiciosDigitalesPage() {
                   <label className="block text-xs font-bold uppercase text-amber-800 mb-1">Fecha Vencimiento</label>
                   <input
                     type="date"
-                    value={formData.expirationDate}
+                    disabled={formData.noExpiration}
+                    value={formData.noExpiration ? '' : formData.expirationDate}
                     onChange={(e) => setFormData({ ...formData, expirationDate: e.target.value })}
-                    className="w-full rounded-xl border border-amber-300 px-3 py-2 text-sm"
+                    className="w-full rounded-xl border border-amber-300 px-3 py-2 text-sm disabled:bg-slate-100"
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Área Imputada (BD)</label>
-                  <select
-                    value={formData.chargedDepartmentId}
-                    onChange={(e) => setFormData({ ...formData, chargedDepartmentId: e.target.value })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  >
-                    <option value="">-- General --</option>
-                    {departments.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </select>
+                <div className="flex items-end pb-1.5">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={formData.noExpiration}
+                      onChange={(e) => setFormData({ ...formData, noExpiration: e.target.checked })}
+                      className="h-4 w-4 rounded border-slate-300 text-military-700"
+                    />
+                    <span>Licencia Sin Renovación / Sin Vencimiento</span>
+                  </label>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {/* Datos de Contacto del Proveedor */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
-                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Cupos Contratados</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Ejecutivo / Contacto</label>
                   <input
-                    type="number"
-                    value={formData.seatsContracted}
-                    onChange={(e) => setFormData({ ...formData, seatsContracted: e.target.value })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    type="text"
+                    placeholder="Nombre del asesor"
+                    value={formData.contactName}
+                    onChange={(e) => setFormData({ ...formData, contactName: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Usuarios / Equipos en Uso</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Teléfono Proveedor</label>
                   <input
-                    type="number"
-                    value={formData.seatsUsed}
-                    onChange={(e) => setFormData({ ...formData, seatsUsed: e.target.value })}
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    type="text"
+                    placeholder="+502 2428-0000"
+                    value={formData.contactPhone}
+                    onChange={(e) => setFormData({ ...formData, contactPhone: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Correo Proveedor</label>
+                  <input
+                    type="email"
+                    placeholder="soporte@proveedor.com"
+                    value={formData.contactEmail}
+                    onChange={(e) => setFormData({ ...formData, contactEmail: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Detalle de Usuarios Asignados / Observaciones</label>
+                <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
+                  Detalle de Usuarios Asignados / Observaciones
+                </label>
                 <textarea
                   rows={2}
-                  placeholder=" Correos asignados, detalles del contrato con el proveedor..."
+                  placeholder="Correos asignados, detalles del contrato..."
                   value={formData.assignedUsersText}
                   onChange={(e) => setFormData({ ...formData, assignedUsersText: e.target.value })}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
@@ -820,7 +941,7 @@ export default function ServiciosDigitalesPage() {
                   type="submit"
                   className="rounded-xl bg-military-700 px-5 py-2 text-sm font-semibold text-white hover:bg-military-800"
                 >
-                  Guardar Contrato / Servicio
+                  {isRenewalMode ? 'Confirmar Renovación' : 'Guardar Licencia / Contrato'}
                 </button>
               </div>
             </form>
@@ -828,59 +949,116 @@ export default function ServiciosDigitalesPage() {
         </div>
       )}
 
-      {/* Modal Tuerca: Crear Nuevas Categorías */}
+      {/* Modal Ajustes: Agregar y Eliminar Categorías y Tipos de Registro */}
       {showCategoryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                 <Settings className="h-5 w-5 text-military-700" />
-                Categorías de Licencias y Contratos
+                Ajustes de Licencias y Contratos (Categorías y Tipos de Registro)
               </h2>
               <button onClick={() => setShowCategoryModal(false)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateCategory} className="mt-4 space-y-3">
-              <div>
-                <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Nombre de Nueva Categoría *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej. Contratos de Telecomunicaciones, Licencias Adobe..."
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Descripción</label>
-                <input
-                  type="text"
-                  placeholder="Descripción breve..."
-                  value={newCategoryDesc}
-                  onChange={(e) => setNewCategoryDesc(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full rounded-xl bg-military-700 py-2 text-xs font-bold text-white hover:bg-military-800"
-              >
-                + Crear Categoría
-              </button>
-            </form>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Columna 1: Categorías */}
+              <div className="space-y-3">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  1. Categorías de Licencias y Contratos
+                </h3>
+                <form onSubmit={handleCreateCategory} className="space-y-2">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Nueva categoría (ej. Licencias Diseño, Antivirus...)"
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Descripción opcional..."
+                    value={newCategoryDesc}
+                    onChange={(e) => setNewCategoryDesc(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full rounded-xl bg-military-700 py-2 text-xs font-bold text-white hover:bg-military-800"
+                  >
+                    + Agregar Categoría
+                  </button>
+                </form>
 
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <h3 className="text-xs font-bold uppercase text-slate-400 mb-2">Categorías Actuales</h3>
-              <div className="max-h-48 overflow-y-auto space-y-1.5">
-                {categories.map((c) => (
-                  <div key={c.id} className="flex justify-between items-center rounded-lg bg-slate-50 px-3 py-2 text-xs">
-                    <span className="font-semibold text-slate-800">{c.name}</span>
-                    <span className="text-slate-500">{c.services_count} servicios ({c.total_users_count} cupos)</span>
-                  </div>
-                ))}
+                <div className="max-h-56 overflow-y-auto space-y-1.5 pt-2 border-t border-slate-100">
+                  {categories.map((c) => (
+                    <div
+                      key={c.id}
+                      className="flex justify-between items-center rounded-xl bg-slate-50 px-3 py-2 text-xs border border-slate-100"
+                    >
+                      <div>
+                        <span className="font-bold text-slate-800 block">{c.name}</span>
+                        <span className="text-[10px] text-slate-500">{c.services_count} registros</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCategory(c.id, c.name)}
+                        className="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50"
+                        title="Eliminar categoría"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Columna 2: Tipos de Registro */}
+              <div className="space-y-3">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  2. Tipos de Registro (Pestañas de Filtro)
+                </h3>
+                <form onSubmit={handleAddContractType} className="space-y-2">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Nuevo tipo (ej. Suscripción Cloud, Certificados SSL...)"
+                    value={newContractTypeName}
+                    onChange={(e) => setNewContractTypeName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full rounded-xl bg-indigo-600 py-2 text-xs font-bold text-white hover:bg-indigo-700"
+                  >
+                    + Agregar Tipo de Registro
+                  </button>
+                </form>
+
+                <div className="max-h-56 overflow-y-auto space-y-1.5 pt-2 border-t border-slate-100">
+                  {Object.entries(contractTypes).map(([key, label]) => (
+                    <div
+                      key={key}
+                      className="flex justify-between items-center rounded-xl bg-slate-50 px-3 py-2 text-xs border border-slate-100"
+                    >
+                      <div>
+                        <span className="font-bold text-slate-800 block">{label}</span>
+                        <span className="font-mono text-[10px] text-slate-400">{key}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteContractType(key, label)}
+                        className="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50"
+                        title="Eliminar tipo de registro"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>

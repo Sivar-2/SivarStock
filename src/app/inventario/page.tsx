@@ -5,7 +5,6 @@ import {
   Boxes,
   Plus,
   Search,
-  Filter,
   QrCode,
   ArrowUpRight,
   RotateCcw,
@@ -19,16 +18,17 @@ import {
   AlertCircle,
   Tag,
   Cpu,
-  Wifi,
   ClipboardCheck,
   Users,
   Warehouse,
   Wrench,
+  ArrowLeftRight,
+  Building2,
 } from 'lucide-react';
 import QrCodeModal from '@/components/QrCodeModal';
 import { generateCsv, generateExcelBuffer, generatePdfDoc } from '@/lib/export';
 
-export default function InventarioPage() {
+export default function BodegaPage() {
   const [items, setItems] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [catalogs, setCatalogs] = useState<any>({
@@ -40,17 +40,19 @@ export default function InventarioPage() {
   });
   const [loading, setLoading] = useState(true);
 
-  // Filtros
+  // Filtros: Por defecto en Bodega mostramos los productos disponibles en cuarto de bodega
   const [search, setSearch] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [categoryId, setCategoryId] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState('DISPONIBLE');
   const [condition, setCondition] = useState('');
 
   // Modales
   const [showNewModal, setShowNewModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showMaintModal, setShowMaintModal] = useState(false);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
@@ -60,11 +62,18 @@ export default function InventarioPage() {
   const [itemDetail, setItemDetail] = useState<any>(null);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Estado del formulario Nuevo Activo
+  // Modo de ingreso en Nuevo Producto de Bodega: seleccionar existente o crear nuevo producto directamente
+  const [newProductMode, setNewProductMode] = useState<'EXISTING' | 'NEW'>('EXISTING');
+
   const [newForm, setNewForm] = useState({
     productId: '',
+    newProductName: '',
+    newCategoryId: 'cat-comp',
+    unitOfMeasure: 'unidad',
+    quantity: '1',
     departmentId: 'dept-bod',
     employeeId: '',
+    operationalStatus: 'DISPONIBLE',
     serialNumber: '',
     macAddress: '',
     imei: '',
@@ -76,12 +85,31 @@ export default function InventarioPage() {
     physicalCondition: 'NUEVO',
     purchaseDate: new Date().toISOString().split('T')[0],
     supplier: '',
+    supplierPhone: '',
+    contractNumber: '',
     purchasePrice: '',
     replacementValue: '',
     warrantyExpiration: '',
     invoiceNumber: '',
     notes: '',
     chargedDepartmentId: '',
+    isRented: false,
+    rentalCost: '',
+    rentalProvider: '',
+  });
+
+  // Estado formulario Traslado desde Bodega
+  const [transferForm, setTransferForm] = useState({
+    toDepartmentId: '',
+    notes: '',
+  });
+
+  // Estado formulario Enviar a Mantenimiento desde Bodega
+  const [maintForm, setMaintForm] = useState({
+    faultDescription: '',
+    severity: 'MODERADA',
+    repairProviderType: 'INTERNO_IT',
+    technicianSupplier: 'Taller Interno IT',
   });
 
   // Estado del formulario Editar Activo
@@ -108,12 +136,6 @@ export default function InventarioPage() {
     notes: '',
   });
 
-  // Creación rápida de producto dentro del modal de Nuevo Activo
-  const [showInlineNewProduct, setShowInlineNewProduct] = useState(false);
-  const [inlineProdName, setInlineProdName] = useState('');
-  const [inlineProdCategory, setInlineProdCategory] = useState('');
-  const [inlineCreating, setInlineCreating] = useState(false);
-
   // Estado formulario Asignación (a Empleado)
   const [assignForm, setAssignForm] = useState({
     employeeId: '',
@@ -132,7 +154,7 @@ export default function InventarioPage() {
     returnNotes: '',
   });
 
-  // Estado del modal de Recuento y Conciliación Física de Inventario
+  // Estado del modal de Recuento y Conciliación Física de Bodega
   const [reconcileMatrix, setReconcileMatrix] = useState<any[]>([]);
   const [reconcileHistory, setReconcileHistory] = useState<any[]>([]);
   const [reconcileCounts, setReconcileCounts] = useState<Record<string, { countedBodega: number; itemNotes: string }>>({});
@@ -156,6 +178,8 @@ export default function InventarioPage() {
     }
   };
 
+  const [allItemsStats, setAllItemsStats] = useState<any[]>([]);
+
   const fetchItems = useCallback(async () => {
     setLoading(true);
     try {
@@ -166,13 +190,16 @@ export default function InventarioPage() {
       if (status) params.set('status', status);
       if (condition) params.set('condition', condition);
 
-      const res = await fetch(`/api/inventory/items?${params.toString()}`);
-      const data = await res.json();
-      if (data.success) {
-        setItems(data.items);
-      }
+      const [resFiltered, resAll] = await Promise.all([
+        fetch(`/api/inventory/items?${params.toString()}`),
+        fetch('/api/inventory/items'),
+      ]);
+      const data = await resFiltered.json();
+      const dataAll = await resAll.json();
+      if (data.success) setItems(data.items);
+      if (dataAll.success) setAllItemsStats(dataAll.items);
     } catch (err) {
-      console.error('Error cargando inventario:', err);
+      console.error('Error cargando bodega:', err);
     } finally {
       setLoading(false);
     }
@@ -242,7 +269,7 @@ export default function InventarioPage() {
         setActionMessage({ type: 'error', text: data.error || 'Error al actualizar activo' });
         return;
       }
-      setActionMessage({ type: 'success', text: `Activo ${editForm.permanentCode} actualizado correctamente.` });
+      setActionMessage({ type: 'success', text: `Producto ${editForm.permanentCode} actualizado correctamente.` });
       setShowEditModal(false);
       fetchItems();
     } catch {
@@ -251,7 +278,10 @@ export default function InventarioPage() {
   };
 
   const handleDecommissionAsset = async (item: any) => {
-    const reason = window.prompt(`Ingrese el motivo obligatorio para dar de baja el activo ${item.permanent_code}:`, 'Equipo obsoleto / daño irreparable');
+    const reason = window.prompt(
+      `Ingrese el motivo para salida por consumo o baja del producto ${item.permanent_code} (${item.product_name}):`,
+      'Salida por consumo / uso en operaciones'
+    );
     if (!reason || !reason.trim()) return;
 
     try {
@@ -260,42 +290,13 @@ export default function InventarioPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setActionMessage({ type: 'error', text: data.error || 'No se pudo dar de baja el activo' });
+        setActionMessage({ type: 'error', text: data.error || 'No se pudo procesar la salida del producto' });
       } else {
         setActionMessage({ type: 'success', text: data.message });
         fetchItems();
       }
     } catch {
-      setActionMessage({ type: 'error', text: 'Error al dar de baja el activo' });
-    }
-  };
-
-  const handleInlineCreateProduct = async () => {
-    if (!inlineProdName.trim() || !inlineProdCategory) return;
-    setInlineCreating(true);
-    try {
-      const res = await fetch('/api/products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: inlineProdName.trim(),
-          categoryId: inlineProdCategory,
-          brand: newForm.brand || null,
-          model: newForm.model || null,
-          unitPrice: newForm.purchasePrice ? Number(newForm.purchasePrice) : 0,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.id) {
-        await fetchCatalogs();
-        setNewForm({ ...newForm, productId: data.id });
-        setShowInlineNewProduct(false);
-        setInlineProdName('');
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setInlineCreating(false);
+      setActionMessage({ type: 'error', text: 'Error al procesar baja/consumo del producto' });
     }
   };
 
@@ -303,22 +304,33 @@ export default function InventarioPage() {
     e.preventDefault();
     setActionMessage(null);
     try {
+      const payload = {
+        ...newForm,
+        productId: newProductMode === 'EXISTING' ? newForm.productId : '',
+        newProductName: newProductMode === 'NEW' ? newForm.newProductName : '',
+      };
+
       const res = await fetch('/api/inventory/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newForm),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
-        setActionMessage({ type: 'error', text: data.error || 'Error al crear activo' });
+        setActionMessage({ type: 'error', text: data.error || 'Error al agregar producto a Bodega' });
         return;
       }
       setActionMessage({ type: 'success', text: data.message });
       setShowNewModal(false);
       setNewForm({
         productId: '',
+        newProductName: '',
+        newCategoryId: 'cat-comp',
+        unitOfMeasure: 'unidad',
+        quantity: '1',
         departmentId: 'dept-bod',
         employeeId: '',
+        operationalStatus: 'DISPONIBLE',
         serialNumber: '',
         macAddress: '',
         imei: '',
@@ -330,16 +342,77 @@ export default function InventarioPage() {
         physicalCondition: 'NUEVO',
         purchaseDate: new Date().toISOString().split('T')[0],
         supplier: '',
+        supplierPhone: '',
+        contractNumber: '',
         purchasePrice: '',
         replacementValue: '',
         warrantyExpiration: '',
         invoiceNumber: '',
         notes: '',
         chargedDepartmentId: '',
+        isRented: false,
+        rentalCost: '',
+        rentalProvider: '',
       });
+      await fetchCatalogs();
       fetchItems();
     } catch {
-      setActionMessage({ type: 'error', text: 'Error de red' });
+      setActionMessage({ type: 'error', text: 'Error de red al guardar en Bodega' });
+    }
+  };
+
+  const handleTransferAsset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedItem) return;
+    setActionMessage(null);
+    try {
+      const res = await fetch('/api/inventory/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'TRANSFER',
+          itemId: selectedItem.id,
+          toDepartmentId: transferForm.toDepartmentId,
+          notes: transferForm.notes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setActionMessage({ type: 'error', text: data.error || 'Error al trasladar producto' });
+        return;
+      }
+      setActionMessage({ type: 'success', text: data.message });
+      setShowTransferModal(false);
+      fetchItems();
+    } catch {
+      setActionMessage({ type: 'error', text: 'Error al realizar traslado' });
+    }
+  };
+
+  const handleSendToMaint = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedItem) return;
+    setActionMessage(null);
+    try {
+      const res = await fetch('/api/inventory/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'SEND_TO_MAINTENANCE',
+          itemId: selectedItem.id,
+          ...maintForm,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setActionMessage({ type: 'error', text: data.error || 'Error al enviar a mantenimiento' });
+        return;
+      }
+      setActionMessage({ type: 'success', text: data.message });
+      setShowMaintModal(false);
+      fetchItems();
+    } catch {
+      setActionMessage({ type: 'error', text: 'Error al enviar a mantenimiento' });
     }
   };
 
@@ -434,7 +507,7 @@ export default function InventarioPage() {
         body: JSON.stringify({
           departmentId: 'dept-bod',
           applyAdjustments: reconcileApplyAdjustments,
-          notes: reconcileNotes || 'Recuento físico y conciliación de inventario total',
+          notes: reconcileNotes || 'Recuento físico y conciliación de Bodega Central',
           items: payloadItems,
         }),
       });
@@ -453,7 +526,6 @@ export default function InventarioPage() {
     }
   };
 
-  // Exportación
   const exportColumns = [
     { key: 'permanent_code', header: 'Código Permanente' },
     { key: 'product_name', header: 'Producto / Equipo' },
@@ -463,10 +535,8 @@ export default function InventarioPage() {
     { key: 'serial_number', header: 'No. Serie' },
     { key: 'mac_address', header: 'Dirección MAC' },
     { key: 'imei', header: 'IMEI' },
-    { key: 'ip_address', header: 'Dirección IP' },
-    { key: 'hostname', header: 'Hostname' },
-    { key: 'department_name', header: 'Área / Ubicación' },
-    { key: 'assigned_user_name', header: 'Empleado Asignado' },
+    { key: 'department_name', header: 'Ubicación / Bodega' },
+    { key: 'assigned_user_name', header: 'Empleado Custodio' },
     { key: 'operational_status', header: 'Estado Operativo' },
     { key: 'physical_condition', header: 'Condición Física' },
     { key: 'purchase_price', header: 'Costo Adquisición (GTQ)' },
@@ -478,28 +548,28 @@ export default function InventarioPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `inventario_sivarstock_${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `bodega_sivarstock_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
   };
 
   const handleExportExcel = () => {
-    const buf = generateExcelBuffer('Inventario Activos', exportColumns, items);
+    const buf = generateExcelBuffer('Bodega Central', exportColumns, items);
     const blob = new Blob([buf as any], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `inventario_sivarstock_${new Date().toISOString().split('T')[0]}.xlsx`;
+    a.download = `bodega_sivarstock_${new Date().toISOString().split('T')[0]}.xlsx`;
     a.click();
   };
 
   const handleExportPdf = () => {
     const doc = generatePdfDoc(
-      'Reporte General de Activos de Inventario',
-      `Total de unidades: ${items.length} | Incluye Serie, MAC, IMEI, IP y Custodio`,
+      'Reporte Oficial de Cuarto de Bodega y Control de Activos',
+      `Unidades listadas: ${items.length} | Incluye Serie, MAC, IMEI, Ubicación y Custodio`,
       exportColumns,
       items
     );
-    doc.save(`inventario_sivarstock_${new Date().toISOString().split('T')[0]}.pdf`);
+    doc.save(`bodega_sivarstock_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const statusBadge = (st: string) => {
@@ -521,24 +591,25 @@ export default function InventarioPage() {
     }
   };
 
-  // Cálculos de Inventario Total = En Bodega + Asignados a Empleados + En Revisión
-  const activeItems = items.filter((i) => i.operational_status !== 'DADO_DE_BAJA');
-  const bodegaCount = items.filter((i) => i.operational_status === 'DISPONIBLE').length;
-  const assignedCount = items.filter((i) => i.operational_status === 'ASIGNADO').length;
-  const revisionCount = items.filter((i) => ['EN_REVISION', 'AVERIADO', 'DEVOLUCION_PENDIENTE'].includes(i.operational_status)).length;
-  const totalValueGtq = activeItems.reduce((acc, i) => acc + Number(i.purchase_price || 0), 0);
+  const activeItems = allItemsStats.filter((i) => i.operational_status !== 'DADO_DE_BAJA');
+  const bodegaCount = allItemsStats.filter((i) => i.operational_status === 'DISPONIBLE').length;
+  const assignedCount = allItemsStats.filter((i) => i.operational_status === 'ASIGNADO').length;
+  const revisionCount = allItemsStats.filter((i) => ['EN_REVISION', 'AVERIADO', 'DEVOLUCION_PENDIENTE'].includes(i.operational_status)).length;
+  const bodegaValueGtq = allItemsStats
+    .filter((i) => i.operational_status === 'DISPONIBLE')
+    .reduce((acc, i) => acc + Number(i.purchase_price || 0), 0);
 
   return (
     <div className="space-y-6">
-      {/* Encabezado y Acciones */}
+      {/* Encabezado de Bodega */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2.5">
-            <Boxes className="h-7 w-7 text-military-700" />
-            Inventario Físico Total y Control Técnico de Activos
+            <Warehouse className="h-7 w-7 text-military-700" />
+            Bodega Central (Control de Cuarto de Bodega y Movimientos)
           </h1>
           <p className="text-sm text-slate-500">
-            Trazabilidad por código permanente <code className="font-mono font-semibold text-military-700">SIV-XX-XXXXXX</code>, Número de Serie, MAC, IMEI, IP, Recuento Físico y Asignación a Empleados.
+            Organizador maestro de productos en el cuarto de bodega: registre productos nuevos o en mantenimiento, realice traslados, asignaciones a personal o salidas por consumo.
           </p>
         </div>
 
@@ -565,73 +636,89 @@ export default function InventarioPage() {
             onClick={openReconcileModal}
             className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs font-bold text-amber-900 shadow-sm hover:bg-amber-100 transition"
           >
-            <ClipboardCheck className="h-4 w-4 text-amber-700" /> Recuento de Inventario
+            <ClipboardCheck className="h-4 w-4 text-amber-700" /> Recuento de Bodega
           </button>
           <button
             onClick={() => setShowNewModal(true)}
             className="inline-flex items-center gap-2 rounded-xl bg-military-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-military-800 transition"
           >
-            <Plus className="h-4 w-4" /> Nuevo Activo
+            <Plus className="h-4 w-4" /> Agregar Producto a Bodega
           </button>
         </div>
       </div>
 
-      {/* Tarjetas Resumen: Inventario Total = Bodega + Empleados + En Revisión */}
+      {/* Pestañas rápidas de vista de Bodega */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div
-          onClick={() => setStatus('')}
-          className="cursor-pointer rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:border-military-500 transition"
-        >
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-slate-500">
-            <span>Inventario Total Activo</span>
-            <Boxes className="h-4 w-4 text-military-700" />
-          </div>
-          <div className="mt-1 text-2xl font-black text-slate-900">{activeItems.length}</div>
-          <div className="mt-1 text-[11px] text-slate-500">Bodega + Empleados + Taller</div>
-        </div>
-
-        <div
           onClick={() => setStatus('DISPONIBLE')}
-          className="cursor-pointer rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm hover:border-emerald-500 transition"
+          className={`cursor-pointer rounded-2xl border p-4 shadow-sm transition ${
+            status === 'DISPONIBLE'
+              ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-500/20'
+              : 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-500'
+          }`}
         >
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-emerald-700">
-            <span>Disponibles en Bodega</span>
+          <div className="flex items-center justify-between text-xs font-bold uppercase text-emerald-800">
+            <span>En Cuarto de Bodega</span>
             <Warehouse className="h-4 w-4 text-emerald-600" />
           </div>
-          <div className="mt-1 text-2xl font-black text-emerald-800">{bodegaCount}</div>
-          <div className="mt-1 text-[11px] text-emerald-600">En Cuarto de Servidores / Áreas</div>
+          <div className="mt-1 text-2xl font-black text-emerald-900">{bodegaCount}</div>
+          <div className="mt-1 text-[11px] text-emerald-700">Productos listos para asignar o trasladar</div>
         </div>
 
         <div
-          onClick={() => setStatus('ASIGNADO')}
-          className="cursor-pointer rounded-2xl border border-sky-200 bg-sky-50/40 p-4 shadow-sm hover:border-sky-500 transition"
-        >
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-sky-700">
-            <span>Asignados a Empleados</span>
-            <Users className="h-4 w-4 text-sky-600" />
-          </div>
-          <div className="mt-1 text-2xl font-black text-sky-800">{assignedCount}</div>
-          <div className="mt-1 text-[11px] text-sky-600">En expedientes de personal</div>
-        </div>
-
-        <div
-          onClick={() => setStatus('EN_REVISION')}
-          className="cursor-pointer rounded-2xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm hover:border-amber-500 transition"
+          onClick={() => setStatus('EN_MANTENIMIENTO_GROUP')}
+          className={`cursor-pointer rounded-2xl border p-4 shadow-sm transition ${
+            status === 'EN_MANTENIMIENTO_GROUP'
+              ? 'border-amber-600 bg-amber-50 ring-2 ring-amber-500/20'
+              : 'border-amber-200 bg-amber-50/40 hover:border-amber-500'
+          }`}
         >
           <div className="flex items-center justify-between text-xs font-bold uppercase text-amber-800">
-            <span>Revisión / Pendientes</span>
+            <span>En Mantenimiento / Taller</span>
             <Wrench className="h-4 w-4 text-amber-600" />
           </div>
           <div className="mt-1 text-2xl font-black text-amber-900">{revisionCount}</div>
-          <div className="mt-1 text-[11px] text-amber-700">En soporte o devolución</div>
+          <div className="mt-1 text-[11px] text-amber-700">Equipos en reparación o diagnóstico</div>
+        </div>
+
+        <div
+          onClick={() => setStatus('BODEGA_Y_MANTENIMIENTO')}
+          className={`cursor-pointer rounded-2xl border p-4 shadow-sm transition ${
+            status === 'BODEGA_Y_MANTENIMIENTO'
+              ? 'border-military-700 bg-military-50 ring-2 ring-military-500/20'
+              : 'border-slate-200 bg-white hover:border-military-500'
+          }`}
+        >
+          <div className="flex items-center justify-between text-xs font-bold uppercase text-slate-600">
+            <span>Total Bodega + Taller</span>
+            <Boxes className="h-4 w-4 text-military-700" />
+          </div>
+          <div className="mt-1 text-2xl font-black text-slate-900">{bodegaCount + revisionCount}</div>
+          <div className="mt-1 text-[11px] text-slate-500">Disponibles + En Mantenimiento</div>
+        </div>
+
+        <div
+          onClick={() => setStatus('')}
+          className={`cursor-pointer rounded-2xl border p-4 shadow-sm transition ${
+            status === ''
+              ? 'border-sky-600 bg-sky-50 ring-2 ring-sky-500/20'
+              : 'border-sky-200 bg-sky-50/40 hover:border-sky-500'
+          }`}
+        >
+          <div className="flex items-center justify-between text-xs font-bold uppercase text-sky-800">
+            <span>Ver Todo (Incl. Asignados)</span>
+            <Users className="h-4 w-4 text-sky-600" />
+          </div>
+          <div className="mt-1 text-2xl font-black text-sky-900">{activeItems.length}</div>
+          <div className="mt-1 text-[11px] text-sky-700">{assignedCount} asignados a empleados</div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-slate-900 p-4 text-white shadow-sm">
-          <div className="text-xs font-bold uppercase text-emerald-400">Valor Total Inventario</div>
+          <div className="text-xs font-bold uppercase text-emerald-400">Valor en Cuarto de Bodega</div>
           <div className="mt-1 text-2xl font-black">
-            Q {totalValueGtq.toLocaleString('es-GT', { minimumFractionDigits: 2 })}
+            Q {bodegaValueGtq.toLocaleString('es-GT', { minimumFractionDigits: 2 })}
           </div>
-          <div className="mt-1 text-[11px] text-slate-400">Activos en Bodega + Empleados</div>
+          <div className="mt-1 text-[11px] text-slate-400">Stock físico inmediato en Bodega</div>
         </div>
       </div>
 
@@ -667,7 +754,7 @@ export default function InventarioPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por código SIV, Serie, MAC, IMEI, IP, Hostname, Empleado..."
+              placeholder="Buscar en Bodega por código SIV, Serie, MAC, IMEI, producto, marca..."
               className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-800 focus:border-military-600 focus:bg-white focus:outline-none"
             />
           </div>
@@ -677,7 +764,7 @@ export default function InventarioPage() {
             onChange={(e) => setDepartmentId(e.target.value)}
             className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 focus:border-military-600 focus:bg-white focus:outline-none"
           >
-            <option value="">Todas las Áreas / Bodega</option>
+            <option value="">Todas las Ubicaciones / Bodegas</option>
             {catalogs.departments.map((d: any) => (
               <option key={d.id} value={d.id}>
                 {d.name} ({d.code})
@@ -701,63 +788,70 @@ export default function InventarioPage() {
           <select
             value={status}
             onChange={(e) => setStatus(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 focus:border-military-600 focus:bg-white focus:outline-none"
+            className="rounded-xl border border-emerald-300 bg-emerald-50/40 px-3 py-2 text-sm font-semibold text-emerald-900 focus:border-military-600 focus:bg-white focus:outline-none"
           >
+            <option value="DISPONIBLE">Solo Cuarto de Bodega (Disponibles)</option>
+            <option value="EN_MANTENIMIENTO_GROUP">En Mantenimiento / Averiados</option>
+            <option value="BODEGA_Y_MANTENIMIENTO">Bodega + Mantenimiento</option>
+            <option value="ASIGNADO">Asignados a Empleados</option>
+            <option value="DADO_DE_BAJA">Salidas por Consumo / Dados de Baja</option>
             <option value="">Todos los Estados</option>
-            <option value="DISPONIBLE">Disponible (En Bodega)</option>
-            <option value="ASIGNADO">Asignado a Empleado</option>
-            <option value="DEVOLUCION_PENDIENTE">Devolución Pendiente</option>
-            <option value="EN_REVISION">En Revisión / Taller</option>
-            <option value="AVERIADO">Averiado</option>
-            <option value="DADO_DE_BAJA">Dado de Baja</option>
           </select>
         </div>
       </div>
 
-      {/* Tabla de Inventario */}
+      {/* Tabla de Bodega */}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                 <th className="px-4 py-3.5">Código Permanente</th>
-                <th className="px-4 py-3.5">Equipo / Producto</th>
+                <th className="px-4 py-3.5">Producto en Bodega</th>
                 <th className="px-4 py-3.5">Identificadores (Serie / MAC / IMEI)</th>
-                <th className="px-4 py-3.5">Área / Ubicación</th>
-                <th className="px-4 py-3.5">Empleado Custodio</th>
-                <th className="px-4 py-3.5">Estado / Condición</th>
+                <th className="px-4 py-3.5">Ubicación / Custodio</th>
+                <th className="px-4 py-3.5">Estado / Modalidad</th>
                 <th className="px-4 py-3.5 text-right">Valor (GTQ)</th>
-                <th className="px-4 py-3.5 text-center">Acciones</th>
+                <th className="px-4 py-3.5 text-center">Movimientos y Acciones de Bodega</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
-                    Cargando registros de inventario...
+                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                    Cargando existencias de Bodega...
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
-                    No se encontraron activos que coincidan con los filtros seleccionados.
+                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                    No hay productos en esta vista de Bodega. Haga clic en <strong>&quot;+ Agregar Producto a Bodega&quot;</strong> para registrar existencias.
                   </td>
                 </tr>
               ) : (
                 items.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/90 transition">
                     <td className="px-4 py-3.5 font-mono text-xs font-bold text-military-800 whitespace-nowrap">
-                      {item.permanent_code}
+                      <div>{item.permanent_code}</div>
+                      {item.qr_printed ? (
+                        <span className="mt-0.5 inline-block rounded bg-emerald-50 px-1.5 py-0.2 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
+                          QR Impreso
+                        </span>
+                      ) : (
+                        <span className="mt-0.5 inline-block rounded bg-slate-100 px-1.5 py-0.2 text-[10px] font-normal text-slate-500">
+                          QR sin imprimir
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="font-semibold text-slate-900">{item.product_name}</div>
                       <div className="text-xs text-slate-500">
-                        {item.brand || '-'} {item.model ? `• ${item.model}` : ''}
+                        {item.category_name} • {item.brand || '-'} {item.model ? `• ${item.model}` : ''}
                       </div>
-                      {item.specifications && (
-                        <div className="text-[11px] text-slate-400 truncate max-w-[200px]" title={item.specifications}>
-                          {item.specifications}
-                        </div>
+                      {(item.is_rented === 1 || item.product_is_rented === 1) && (
+                        <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-800">
+                          Alquilado: Q {Number(item.rental_cost || item.product_rental_cost || 0).toFixed(2)} ({item.rental_provider || item.product_rental_provider || 'Proveedor'})
+                        </span>
                       )}
                     </td>
                     <td className="px-4 py-3.5 font-mono text-xs text-slate-600 space-y-0.5">
@@ -774,28 +868,21 @@ export default function InventarioPage() {
                           <span className="font-bold text-slate-400">IMEI:</span> {item.imei}
                         </div>
                       )}
-                      {(item.ip_address || item.hostname) && (
-                        <div className="text-[11px] text-sky-700">
-                          {item.hostname ? `${item.hostname} ` : ''}{item.ip_address ? `(${item.ip_address})` : ''}
-                        </div>
-                      )}
                     </td>
-                    <td className="px-4 py-3.5">
-                      <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                        {item.department_name || 'Bodega'}
+                    <td className="px-4 py-3.5 text-xs">
+                      <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">
+                        <Building2 className="h-3 w-3 text-slate-500" />
+                        {item.department_name || 'Cuarto de Bodega'}
                       </span>
-                    </td>
-                    <td className="px-4 py-3.5 text-xs text-slate-700">
-                      {item.assigned_user_name ? (
-                        <div>
-                          <span className="font-semibold text-slate-900 block">{item.assigned_user_name}</span>
-                          {item.assigned_employee_code && (
-                            <span className="text-[11px] text-slate-400 font-mono">{item.assigned_employee_code}</span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 italic">Disponible en Bodega</span>
-                      )}
+                      <div className="mt-1">
+                        {item.assigned_user_name ? (
+                          <span className="font-semibold text-sky-800">
+                            Custodio: {item.assigned_user_name}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700 font-medium">En Cuarto de Bodega</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3.5">
                       <span
@@ -803,7 +890,7 @@ export default function InventarioPage() {
                           item.operational_status
                         )}`}
                       >
-                        {item.operational_status}
+                        {item.operational_status === 'DISPONIBLE' ? 'EN BODEGA' : item.operational_status}
                       </span>
                       <div className="mt-1 text-[11px] text-slate-500">Condición: {item.physical_condition}</div>
                     </td>
@@ -813,45 +900,8 @@ export default function InventarioPage() {
                         : <span className="text-slate-400 font-normal">No reg.</span>}
                     </td>
                     <td className="px-4 py-3.5">
-                      <div className="flex items-center justify-center gap-1">
-                        {/* Ver Ficha Técnica e Historial */}
-                        <button
-                          onClick={() => openDetail(item.id)}
-                          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-                          title="Ver Ficha e Historial Completo"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-
-                        {/* Editar Activo (Serie, MAC, IMEI, IP, Precio, etc.) */}
-                        <button
-                          onClick={() => openEditModal(item)}
-                          className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 hover:text-military-700"
-                          title="Editar Serie, MAC, IMEI, IP, Estado o Precio"
-                        >
-                          <Edit3 className="h-4 w-4" />
-                        </button>
-
-                        {/* Etiqueta QR */}
-                        <button
-                          onClick={() => {
-                            setSelectedItem({
-                              permanentCode: item.permanent_code,
-                              productName: item.product_name,
-                              brand: item.brand,
-                              model: item.model,
-                              serialNumber: item.serial_number,
-                              departmentName: item.department_name,
-                            });
-                            setShowQrModal(true);
-                          }}
-                          className="rounded-lg p-1.5 text-military-700 hover:bg-military-50"
-                          title="Generar Etiqueta QR"
-                        >
-                          <QrCode className="h-4 w-4" />
-                        </button>
-
-                        {/* Asignar a Empleado (si está DISPONIBLE) */}
+                      <div className="flex flex-wrap items-center justify-center gap-1">
+                        {/* Asignar a Empleado */}
                         {item.operational_status === 'DISPONIBLE' && (
                           <button
                             onClick={() => {
@@ -865,14 +915,50 @@ export default function InventarioPage() {
                               });
                               setShowAssignModal(true);
                             }}
-                            className="rounded-lg p-1.5 text-sky-600 hover:bg-sky-50"
-                            title="Asignar Activo a Empleado"
+                            className="inline-flex items-center gap-1 rounded-lg bg-sky-50 px-2 py-1 text-[11px] font-bold text-sky-700 hover:bg-sky-100 border border-sky-200"
+                            title="Asignar este producto a un Empleado"
                           >
-                            <ArrowUpRight className="h-4 w-4" />
+                            <ArrowUpRight className="h-3.5 w-3.5" /> Asignar
                           </button>
                         )}
 
-                        {/* Devolver a Bodega (si está ASIGNADO o DEVOLUCION_PENDIENTE) */}
+                        {/* Trasladar de Bodega / Área */}
+                        <button
+                          onClick={() => {
+                            setSelectedItem(item);
+                            setTransferForm({
+                              toDepartmentId: item.current_department_id || 'dept-bod',
+                              notes: '',
+                            });
+                            setShowTransferModal(true);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2 py-1 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
+                          title="Trasladar de Bodega o Área"
+                        >
+                          <ArrowLeftRight className="h-3.5 w-3.5" /> Traslado
+                        </button>
+
+                        {/* Enviar a Mantenimiento */}
+                        {item.operational_status !== 'EN_REVISION' && item.operational_status !== 'DADO_DE_BAJA' && (
+                          <button
+                            onClick={() => {
+                              setSelectedItem(item);
+                              setMaintForm({
+                                faultDescription: '',
+                                severity: 'MODERADA',
+                                repairProviderType: 'INTERNO_IT',
+                                technicianSupplier: 'Taller Interno IT',
+                              });
+                              setShowMaintModal(true);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800 hover:bg-amber-100 border border-amber-200"
+                            title="Enviar Producto a Mantenimiento"
+                          >
+                            <Wrench className="h-3.5 w-3.5" /> Mant.
+                          </button>
+                        )}
+
+                        {/* Devolver a Bodega si estaba asignado */}
                         {(item.operational_status === 'ASIGNADO' || item.operational_status === 'DEVOLUCION_PENDIENTE') && (
                           <button
                             onClick={async () => {
@@ -890,18 +976,58 @@ export default function InventarioPage() {
                               setShowReturnModal(true);
                             }}
                             className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50"
-                            title="Registrar Devolución a Bodega"
+                            title="Devolver a Cuarto de Bodega"
                           >
                             <RotateCcw className="h-4 w-4" />
                           </button>
                         )}
 
-                        {/* Dar de Baja */}
+                        {/* Ver Ficha */}
+                        <button
+                          onClick={() => openDetail(item.id)}
+                          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                          title="Ver Ficha e Historial"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+
+                        {/* Editar */}
+                        <button
+                          onClick={() => openEditModal(item)}
+                          className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 hover:text-military-700"
+                          title="Editar Serie, MAC, IMEI, Estado o Precio"
+                        >
+                          <Edit3 className="h-4 w-4" />
+                        </button>
+
+                        {/* QR */}
+                        <button
+                          onClick={() => {
+                            setSelectedItem({
+                              id: item.id,
+                              permanentCode: item.permanent_code,
+                              productName: item.product_name,
+                              brand: item.brand,
+                              model: item.model,
+                              serialNumber: item.serial_number,
+                              departmentName: item.department_name,
+                              employeeCode: item.assigned_employee_code,
+                              purchaseDate: item.purchase_date,
+                            });
+                            setShowQrModal(true);
+                          }}
+                          className="rounded-lg p-1.5 text-military-700 hover:bg-military-50"
+                          title="Etiqueta QR"
+                        >
+                          <QrCode className="h-4 w-4" />
+                        </button>
+
+                        {/* Salida por Consumo / Eliminar */}
                         {item.operational_status !== 'DADO_DE_BAJA' && (
                           <button
                             onClick={() => handleDecommissionAsset(item)}
                             className="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50"
-                            title="Dar de Baja Formal"
+                            title="Salida por Consumo o Baja de Bodega"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -923,15 +1049,15 @@ export default function InventarioPage() {
         item={selectedItem}
       />
 
-      {/* Modal Nuevo Activo */}
+      {/* Modal Agregar Producto a Bodega (Súper Detallado y Fácil) */}
       {showNewModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Registrar Nuevo Activo Individual</h2>
+                <h2 className="text-lg font-bold text-slate-900">Agregar Producto / Equipo al Cuarto de Bodega</h2>
                 <p className="text-xs text-slate-500">
-                  Se generará un código permanente <code className="font-mono font-bold text-military-700">SIV-XX-XXXXXX</code> y se sumará automáticamente al Inventario Total.
+                  Seleccione un producto existente o cree uno nuevo directamente. Puede ingresarlo como Disponible en Bodega, En Mantenimiento o Asignado.
                 </p>
               </div>
               <button onClick={() => setShowNewModal(false)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100">
@@ -940,70 +1066,169 @@ export default function InventarioPage() {
             </div>
 
             <form onSubmit={handleCreateAsset} className="mt-4 space-y-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-semibold text-slate-700">Producto / Equipo *</label>
-                    <button
-                      type="button"
-                      onClick={() => setShowInlineNewProduct(!showInlineNewProduct)}
-                      className="text-[11px] font-bold text-military-700 hover:underline flex items-center gap-0.5"
-                    >
-                      <Plus className="h-3 w-3" /> {showInlineNewProduct ? 'Cancelar' : 'Crear nuevo tipo'}
-                    </button>
-                  </div>
+              {/* Selector de modo: Producto existente o Crear nuevo producto en un paso */}
+              <div className="flex gap-2 rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setNewProductMode('EXISTING')}
+                  className={`flex-1 rounded-lg py-2 text-xs font-bold transition ${
+                    newProductMode === 'EXISTING' ? 'bg-white text-military-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Seleccionar Producto Existente del Catálogo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewProductMode('NEW')}
+                  className={`flex-1 rounded-lg py-2 text-xs font-bold transition ${
+                    newProductMode === 'NEW' ? 'bg-military-700 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  + Crear Nuevo Producto y Agregar a Bodega
+                </button>
+              </div>
 
-                  {showInlineNewProduct ? (
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 space-y-2">
-                      <input
-                        type="text"
-                        placeholder="Nombre ej. Laptop Dell Latitude 5440"
-                        value={inlineProdName}
-                        onChange={(e) => setInlineProdName(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs"
-                      />
-                      <div className="flex gap-2">
-                        <select
-                          value={inlineProdCategory}
-                          onChange={(e) => setInlineProdCategory(e.target.value)}
-                          className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs"
-                        >
-                          <option value="">Categoría...</option>
-                          {catalogs.categories.map((c: any) => (
-                            <option key={c.id} value={c.id}>{c.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={handleInlineCreateProduct}
-                          disabled={inlineCreating}
-                          className="rounded-lg bg-military-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-military-800"
-                        >
-                          {inlineCreating ? '...' : 'Guardar'}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
+              {newProductMode === 'EXISTING' ? (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Producto de Catálogo *</label>
                     <select
                       required
                       value={newForm.productId}
-                      onChange={(e) => setNewForm({ ...newForm, productId: e.target.value })}
+                      onChange={(e) => {
+                        const pid = e.target.value;
+                        const found = catalogs.products.find((p: any) => p.id === pid);
+                        setNewForm({
+                          ...newForm,
+                          productId: pid,
+                          brand: found?.brand || newForm.brand,
+                          model: found?.model || newForm.model,
+                          purchasePrice: found?.unit_price ? String(found.unit_price) : newForm.purchasePrice,
+                          supplier: found?.default_supplier || newForm.supplier,
+                        });
+                      }}
                       className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     >
                       <option value="">Seleccione un producto...</option>
-                      {catalogs.products
-                        .filter((p: any) => !p.is_consumable)
-                        .map((p: any) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name} ({p.code})
-                          </option>
-                        ))}
+                      {catalogs.products.map((p: any) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.code} — {p.category_name})
+                        </option>
+                      ))}
                     </select>
-                  )}
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Cantidad de Unidades a Ingresar *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      required
+                      value={newForm.quantity}
+                      onChange={(e) => setNewForm({ ...newForm, quantity: e.target.value })}
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+                  <div className="text-xs font-bold uppercase text-emerald-800">Datos del Nuevo Producto</div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">Nombre del Producto / Equipo *</label>
+                      <input
+                        type="text"
+                        required
+                        value={newForm.newProductName}
+                        onChange={(e) => setNewForm({ ...newForm, newProductName: e.target.value })}
+                        placeholder="Ej. Switch Gigabit 24 Puertos / Cable UTP Cat 6 / Monitor 27''"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">Categoría / Carpeta *</label>
+                      <select
+                        required
+                        value={newForm.newCategoryId}
+                        onChange={(e) => setNewForm({ ...newForm, newCategoryId: e.target.value })}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        {catalogs.categories.map((c: any) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">Unidad / Medida</label>
+                      <select
+                        value={newForm.unitOfMeasure}
+                        onChange={(e) => setNewForm({ ...newForm, unitOfMeasure: e.target.value })}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="unidad">Unidad / Equipo</option>
+                        <option value="metros">Metros (m) — Cableado</option>
+                        <option value="m2">Metro Cuadrado (m²)</option>
+                        <option value="cartucho">Cartucho / Tinta / Tóner</option>
+                        <option value="backup">Unidad de Backup / Respaldo</option>
+                        <option value="chip_sim">Chip SIM</option>
+                        <option value="caja">Caja / Rollo</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">Cantidad de Unidades a Ingresar *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        required
+                        value={newForm.quantity}
+                        onChange={(e) => setNewForm({ ...newForm, quantity: e.target.value })}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">Teléfono Contacto Proveedor (Opcional)</label>
+                      <input
+                        type="text"
+                        value={newForm.supplierPhone}
+                        onChange={(e) => setNewForm({ ...newForm, supplierPhone: e.target.value })}
+                        placeholder="Ej. +502 2233-4455"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">No. Contrato Proveedor (Opcional)</label>
+                      <input
+                        type="text"
+                        value={newForm.contractNumber}
+                        onChange={(e) => setNewForm({ ...newForm, contractNumber: e.target.value })}
+                        placeholder="Ej. CTR-2026-089"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Estado inicial en Bodega (Disponible, En Mantenimiento o Asignado) */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">Estado en Bodega *</label>
+                  <select
+                    value={newForm.operationalStatus}
+                    onChange={(e) => setNewForm({ ...newForm, operationalStatus: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold"
+                  >
+                    <option value="DISPONIBLE">Disponible en Cuarto de Bodega</option>
+                    <option value="EN_REVISION">En Mantenimiento / Revisión Técnica</option>
+                    <option value="AVERIADO">Averiado en Bodega (Para Reparar)</option>
+                  </select>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">Área / Bodega Destino *</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">Ubicación / Bodega *</label>
                   <select
                     required
                     value={newForm.departmentId}
@@ -1033,7 +1258,7 @@ export default function InventarioPage() {
                     }}
                     className="w-full rounded-xl border border-sky-200 bg-sky-50/30 px-3 py-2 text-sm"
                   >
-                    <option value="">-- Dejar Disponible en Bodega --</option>
+                    <option value="">-- Dejar en Cuarto de Bodega --</option>
                     {employees.map((emp) => (
                       <option key={emp.id} value={emp.id}>
                         {emp.full_name} ({emp.employee_code})
@@ -1043,10 +1268,48 @@ export default function InventarioPage() {
                 </div>
               </div>
 
-              {/* Bloque Técnico: Serie, MAC, IMEI, IP, Hostname */}
+              {/* Control de Equipo Alquilado */}
+              <div className="rounded-xl border border-purple-200 bg-purple-50/40 p-3">
+                <label className="flex items-center gap-2 text-xs font-bold text-purple-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newForm.isRented}
+                    onChange={(e) => setNewForm({ ...newForm, isRented: e.target.checked })}
+                    className="h-4 w-4 rounded border-purple-300 text-purple-700"
+                  />
+                  ¿Este producto / equipo es Alquilado (Arrendamiento / Leasing)?
+                </label>
+                {newForm.isRented && (
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-purple-900">Pago Mensual por Alquiler (GTQ)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={newForm.rentalCost}
+                        onChange={(e) => setNewForm({ ...newForm, rentalCost: e.target.value })}
+                        placeholder="Ej. 350.00"
+                        className="w-full rounded-xl border border-purple-200 bg-white px-3 py-1.5 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-purple-900">Empresa / Proveedor Arrendador</label>
+                      <input
+                        type="text"
+                        value={newForm.rentalProvider}
+                        onChange={(e) => setNewForm({ ...newForm, rentalProvider: e.target.value })}
+                        placeholder="Ej. CopyRent Guatemala / Ricoh"
+                        className="w-full rounded-xl border border-purple-200 bg-white px-3 py-1.5 text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Identificadores Técnicos */}
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <Cpu className="h-4 w-4 text-military-700" /> Identificadores Técnicos del Dispositivo (Serie, MAC, IMEI, Red)
+                  <Cpu className="h-4 w-4 text-military-700" /> Identificadores Técnicos (Serie, MAC, IMEI, IP, Especificaciones)
                 </h3>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
@@ -1060,55 +1323,54 @@ export default function InventarioPage() {
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">Dirección MAC (Wi-Fi / LAN)</label>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Dirección MAC</label>
                     <input
                       type="text"
                       value={newForm.macAddress}
                       onChange={(e) => setNewForm({ ...newForm, macAddress: e.target.value })}
-                      placeholder="Ej. 00:1B:44:11:3A:B7"
+                      placeholder="00:1B:44:11:3A:B7"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-mono"
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">Código IMEI (Si aplica)</label>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Código IMEI</label>
                     <input
                       type="text"
                       value={newForm.imei}
                       onChange={(e) => setNewForm({ ...newForm, imei: e.target.value })}
-                      placeholder="15 dígitos para tablets/módems"
+                      placeholder="15 dígitos (si aplica)"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-mono"
                     />
                   </div>
                 </div>
-
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">Dirección IP Fija / Red</label>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Dirección IP</label>
                     <input
                       type="text"
                       value={newForm.ipAddress}
                       onChange={(e) => setNewForm({ ...newForm, ipAddress: e.target.value })}
-                      placeholder="Ej. 192.168.1.45"
+                      placeholder="192.168.1.45"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-mono"
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">Hostname / Nombre PC</label>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Hostname</label>
                     <input
                       type="text"
                       value={newForm.hostname}
                       onChange={(e) => setNewForm({ ...newForm, hostname: e.target.value })}
-                      placeholder="Ej. PC-FINANZAS-01"
+                      placeholder="PC-BODEGA-01"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-mono"
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-700">Especificaciones (RAM/CPU/Disco)</label>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Especificaciones</label>
                     <input
                       type="text"
                       value={newForm.specifications}
                       onChange={(e) => setNewForm({ ...newForm, specifications: e.target.value })}
-                      placeholder="Ej. Core i7, 16GB RAM, 512GB SSD"
+                      placeholder="RAM, Disco, Metros, Color..."
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                     />
                   </div>
@@ -1122,7 +1384,7 @@ export default function InventarioPage() {
                     type="text"
                     value={newForm.brand}
                     onChange={(e) => setNewForm({ ...newForm, brand: e.target.value })}
-                    placeholder="Dell, HP, Zebra..."
+                    placeholder="Dell, HP, Hikvision, APC..."
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   />
                 </div>
@@ -1132,7 +1394,7 @@ export default function InventarioPage() {
                     type="text"
                     value={newForm.model}
                     onChange={(e) => setNewForm({ ...newForm, model: e.target.value })}
-                    placeholder="Latitude 5430..."
+                    placeholder="Modelo del producto..."
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   />
                 </div>
@@ -1144,16 +1406,16 @@ export default function InventarioPage() {
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   >
                     <option value="NUEVO">Nuevo</option>
-                    <option value="BUENO">Bueno</option>
+                    <option value="BUENO">Usado en buen estado</option>
                     <option value="USADO">Usado</option>
-                    <option value="NO_EVALUADO">No Evaluado</option>
+                    <option value="EN_REPARACION">En reparación / mantenimiento</option>
                   </select>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">Costo Adquisición (GTQ)</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">Costo Unitario (GTQ)</label>
                   <input
                     type="number"
                     step="0.01"
@@ -1186,13 +1448,13 @@ export default function InventarioPage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">Observaciones / Notas</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">Notas de Bodega / Detalles de Mantenimiento</label>
                 <textarea
                   rows={2}
                   value={newForm.notes}
                   onChange={(e) => setNewForm({ ...newForm, notes: e.target.value })}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="Detalles adicionales, accesorios incluidos..."
+                  placeholder="Ubicación en estante, accesorios incluidos o detalle si ingresa por mantenimiento..."
                 />
               </div>
 
@@ -1208,7 +1470,144 @@ export default function InventarioPage() {
                   type="submit"
                   className="rounded-xl bg-military-700 px-5 py-2 text-sm font-semibold text-white hover:bg-military-800"
                 >
-                  Guardar y Generar Código Permanente
+                  Guardar Producto en Bodega
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Traslado desde Bodega */}
+      {showTransferModal && selectedItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Trasladar Producto de Bodega / Área</h2>
+                <p className="text-xs font-mono font-semibold text-military-700">
+                  {selectedItem.permanent_code} — {selectedItem.product_name}
+                </p>
+              </div>
+              <button onClick={() => setShowTransferModal(false)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <form onSubmit={handleTransferAsset} className="mt-4 space-y-4">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">Ubicación / Departamento Destino *</label>
+                <select
+                  required
+                  value={transferForm.toDepartmentId}
+                  onChange={(e) => setTransferForm({ ...transferForm, toDepartmentId: e.target.value })}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="">Seleccione destino...</option>
+                  {catalogs.departments.map((d: any) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} ({d.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">Motivo / Observaciones del Traslado</label>
+                <textarea
+                  rows={2}
+                  value={transferForm.notes}
+                  onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })}
+                  placeholder="Ej. Traslado desde Cuarto de Bodega hacia Sala de Servidores / Planta..."
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowTransferModal(false)}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                >
+                  Confirmar Traslado
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Enviar a Mantenimiento desde Bodega */}
+      {showMaintModal && selectedItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Enviar Producto a Mantenimiento</h2>
+                <p className="text-xs font-mono font-semibold text-amber-700">
+                  {selectedItem.permanent_code} — {selectedItem.product_name}
+                </p>
+              </div>
+              <button onClick={() => setShowMaintModal(false)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <form onSubmit={handleSendToMaint} className="mt-4 space-y-4">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">Modalidad de Reparación *</label>
+                <select
+                  value={maintForm.repairProviderType}
+                  onChange={(e) =>
+                    setMaintForm({
+                      ...maintForm,
+                      repairProviderType: e.target.value,
+                      technicianSupplier: e.target.value === 'INTERNO_IT' ? 'Taller Interno IT' : '',
+                    })
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="INTERNO_IT">Reparación Interna (Nosotros / IT)</option>
+                  <option value="TERCERO_EXTERNO">Reparación con un Tercero (Proveedor Externo)</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">Taller / Técnico Responsable *</label>
+                <input
+                  type="text"
+                  required
+                  value={maintForm.technicianSupplier}
+                  onChange={(e) => setMaintForm({ ...maintForm, technicianSupplier: e.target.value })}
+                  placeholder="Ej. Taller Interno IT / Centro de Servicio Autorizado"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">¿Qué se está reparando / Falla detectada? *</label>
+                <textarea
+                  rows={3}
+                  required
+                  value={maintForm.faultDescription}
+                  onChange={(e) => setMaintForm({ ...maintForm, faultDescription: e.target.value })}
+                  placeholder="Describa qué se reparará o qué repuesto necesita..."
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMaintModal(false)}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+                >
+                  Registrar en Mantenimiento
                 </button>
               </div>
             </form>
@@ -1223,7 +1622,7 @@ export default function InventarioPage() {
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
                 <span className="font-mono text-xs font-bold text-military-700">{editForm.permanentCode}</span>
-                <h2 className="text-lg font-bold text-slate-900">Editar Ficha Técnica y Datos del Activo</h2>
+                <h2 className="text-lg font-bold text-slate-900">Editar Ficha Técnica y Ubicación en Bodega</h2>
               </div>
               <button onClick={() => setShowEditModal(false)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100">
                 <X className="h-5 w-5" />
@@ -1321,12 +1720,12 @@ export default function InventarioPage() {
                     onChange={(e) => setEditForm({ ...editForm, operationalStatus: e.target.value })}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   >
-                    <option value="DISPONIBLE">DISPONIBLE (Bodega)</option>
+                    <option value="DISPONIBLE">DISPONIBLE (En Bodega)</option>
                     <option value="ASIGNADO">ASIGNADO</option>
                     <option value="DEVOLUCION_PENDIENTE">DEVOLUCIÓN PENDIENTE</option>
-                    <option value="EN_REVISION">EN REVISIÓN</option>
+                    <option value="EN_REVISION">EN MANTENIMIENTO</option>
                     <option value="AVERIADO">AVERIADO</option>
-                    <option value="DADO_DE_BAJA">DADO DE BAJA</option>
+                    <option value="DADO_DE_BAJA">SALIDA / DADO DE BAJA</option>
                   </select>
                 </div>
                 <div>
@@ -1347,7 +1746,7 @@ export default function InventarioPage() {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-700">Área / Departamento</label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">Área / Bodega</label>
                   <select
                     value={editForm.currentDepartmentId}
                     onChange={(e) => setEditForm({ ...editForm, currentDepartmentId: e.target.value })}
@@ -1415,7 +1814,7 @@ export default function InventarioPage() {
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Asignar Activo a Empleado</h2>
+                <h2 className="text-lg font-bold text-slate-900">Asignar Producto de Bodega a Empleado</h2>
                 <p className="text-xs font-mono font-semibold text-military-700">
                   {selectedItem.permanent_code} — {selectedItem.product_name}
                 </p>
@@ -1468,22 +1867,12 @@ export default function InventarioPage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">Fecha Estimada Retorno (Opcional)</label>
-                <input
-                  type="date"
-                  value={assignForm.expectedReturnDate}
-                  onChange={(e) => setAssignForm({ ...assignForm, expectedReturnDate: e.target.value })}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-              </div>
-
-              <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-700">Notas de Entrega</label>
                 <textarea
                   rows={2}
                   value={assignForm.notes}
                   onChange={(e) => setAssignForm({ ...assignForm, notes: e.target.value })}
-                  placeholder="Se entrega con cargador original y maletín..."
+                  placeholder="Se entrega desde Cuarto de Bodega con accesorios..."
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 />
               </div>
@@ -1500,7 +1889,7 @@ export default function InventarioPage() {
                   type="submit"
                   className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
                 >
-                  Confirmar Asignación y Generar Acta
+                  Confirmar Asignación
                 </button>
               </div>
             </form>
@@ -1508,13 +1897,13 @@ export default function InventarioPage() {
         </div>
       )}
 
-      {/* Modal Devolución */}
+      {/* Modal Devolución a Bodega */}
       {showReturnModal && selectedItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Procesar Devolución de Equipo</h2>
+                <h2 className="text-lg font-bold text-slate-900">Recibir Devolución en Bodega</h2>
                 <p className="text-xs font-mono text-slate-500">{selectedItem.permanent_code}</p>
               </div>
               <button onClick={() => setShowReturnModal(false)}>
@@ -1530,7 +1919,7 @@ export default function InventarioPage() {
                   onChange={(e) => setReturnForm({ ...returnForm, returnCondition: e.target.value })}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 >
-                  <option value="BUENO">Bueno (Listo para reasignar en Bodega)</option>
+                  <option value="BUENO">Bueno (Listo en Cuarto de Bodega)</option>
                   <option value="USADO">Usado con desgaste normal</option>
                   <option value="DANADO">Dañado</option>
                   <option value="AVERIADO">Averiado (Requiere soporte)</option>
@@ -1584,7 +1973,7 @@ export default function InventarioPage() {
                   type="submit"
                   className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
                 >
-                  Registrar Devolución
+                  Ingresar a Bodega
                 </button>
               </div>
             </form>
@@ -1635,12 +2024,12 @@ export default function InventarioPage() {
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block">Área Actual</span>
+                <span className="text-slate-400 block">Ubicación Actual</span>
                 <span className="font-semibold text-slate-800">{itemDetail.item.department_name}</span>
               </div>
               <div>
                 <span className="text-slate-400 block">Empleado Custodio</span>
-                <span className="font-semibold text-slate-800">{itemDetail.item.assigned_user_name || 'En Bodega'}</span>
+                <span className="font-semibold text-slate-800">{itemDetail.item.assigned_user_name || 'En Cuarto de Bodega'}</span>
               </div>
               <div>
                 <span className="text-slate-400 block">Valor Adquisición</span>
@@ -1650,11 +2039,10 @@ export default function InventarioPage() {
               </div>
             </div>
 
-            {/* Historial de Asignaciones */}
             <div className="mt-6">
-              <h3 className="text-sm font-bold text-slate-800 mb-2">Historial de Asignaciones (Códigos de Entrega)</h3>
+              <h3 className="text-sm font-bold text-slate-800 mb-2">Historial de Asignaciones</h3>
               {itemDetail.assignments.length === 0 ? (
-                <p className="text-xs text-slate-400">Este activo no registra asignaciones previas.</p>
+                <p className="text-xs text-slate-400">Este producto no registra asignaciones previas.</p>
               ) : (
                 <div className="space-y-2">
                   {itemDetail.assignments.map((a: any) => (
@@ -1679,7 +2067,6 @@ export default function InventarioPage() {
               )}
             </div>
 
-            {/* Historial de Kardex */}
             <div className="mt-6">
               <h3 className="text-sm font-bold text-slate-800 mb-2">Trazabilidad de Movimientos (Kardex)</h3>
               <div className="space-y-2">
@@ -1701,7 +2088,7 @@ export default function InventarioPage() {
         </div>
       )}
 
-      {/* Modal de Recuento Físico y Conciliación de Inventario Total */}
+      {/* Modal de Recuento Físico y Conciliación de Bodega */}
       {showReconcileModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
@@ -1709,7 +2096,7 @@ export default function InventarioPage() {
               <div>
                 <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                   <ClipboardCheck className="h-5 w-5 text-amber-600" />
-                  Recuento Físico y Conciliación de Inventario Total
+                  Recuento Físico de Cuarto de Bodega y Conciliación Total
                 </h2>
                 <p className="text-xs text-slate-500">
                   Verifique las existencias físicas en Bodega. El sistema suma automáticamente <strong>En Bodega + Asignados a Empleados = Inventario Total</strong>.
@@ -1865,14 +2252,14 @@ export default function InventarioPage() {
                     disabled={reconcileSubmitting}
                     className="rounded-xl bg-military-700 px-5 py-2 text-sm font-semibold text-white hover:bg-military-800 disabled:opacity-50"
                   >
-                    {reconcileSubmitting ? 'Procesando Recuento...' : 'Guardar Recuento y Conciliar Inventario'}
+                    {reconcileSubmitting ? 'Procesando Recuento...' : 'Guardar Recuento y Conciliar Bodega'}
                   </button>
                 </div>
               </form>
             ) : (
               <div className="mt-4 space-y-3">
                 {reconcileHistory.length === 0 ? (
-                  <p className="py-8 text-center text-xs text-slate-400">Aún no se han registrado recuentos físicos de inventario.</p>
+                  <p className="py-8 text-center text-xs text-slate-400">Aún no se han registrado recuentos físicos de bodega.</p>
                 ) : (
                   reconcileHistory.map((h: any) => (
                     <div key={h.id} className="rounded-xl border border-slate-200 p-4 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1897,10 +2284,6 @@ export default function InventarioPage() {
                         <div className="rounded-lg bg-emerald-50 px-3 py-1.5">
                           <div className="text-[10px] text-emerald-700 uppercase">Total Conciliado</div>
                           <div className="font-mono font-black text-emerald-900">{h.total_counted}</div>
-                        </div>
-                        <div className="rounded-lg bg-amber-50 px-3 py-1.5">
-                          <div className="text-[10px] text-amber-700 uppercase">Diferencias</div>
-                          <div className="font-mono font-bold text-amber-900">{h.discrepancies_count}</div>
                         </div>
                       </div>
                     </div>

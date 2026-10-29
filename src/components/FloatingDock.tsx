@@ -31,7 +31,7 @@ interface FloatingDockProps {
 
 const SHORTCUT_MAP: Record<string, { name: string; icon: any; tabKey: string }> = {
   '/': { name: 'Inicio', icon: LayoutDashboard, tabKey: 'DASHBOARD' },
-  '/inventario': { name: 'Inventario', icon: Boxes, tabKey: 'INVENTARIO' },
+  '/inventario': { name: 'Bodega', icon: Boxes, tabKey: 'INVENTARIO' },
   '/celulares': { name: 'Celulares', icon: Smartphone, tabKey: 'CELULARES' },
   '/productos': { name: 'Productos', icon: Layers, tabKey: 'PRODUCTOS' },
   '/movimientos': { name: 'Movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS' },

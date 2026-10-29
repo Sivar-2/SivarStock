@@ -11,14 +11,18 @@ export async function GET(req: NextRequest) {
     const departmentId = url.searchParams.get('departmentId');
     const status = url.searchParams.get('status');
     const carrier = url.searchParams.get('carrier');
+    const assignmentMode = url.searchParams.get('assignmentMode');
+    const incidentFilter = url.searchParams.get('incidentFilter');
     const contractFilter = url.searchParams.get('contractFilter'); // 'EXPIRING', 'EXPIRED', 'ACTIVE'
 
     let sql = `
       SELECT 
         m.id, m.device_code, m.brand, m.model, m.serial_number, m.mac_address,
         m.employee_id, m.department_id,
-        m.phone_number, m.imei, m.sim_iccid, m.carrier, m.plan_name, m.monthly_cost,
+        m.phone_number, m.imei, m.sim_iccid, m.carrier, m.custom_carrier_note,
+        m.plan_name, m.monthly_cost,
         m.contract_number, m.contract_start_date, m.contract_end_date, m.renewal_alert_days,
+        m.assignment_mode, m.incident_type, m.incident_date, m.repair_details,
         m.delivery_date, m.status, m.notes_history,
         m.created_at, m.updated_at,
         e.full_name as employee_name, e.employee_code, e.email as employee_email, e.initials as employee_initials,
@@ -27,7 +31,12 @@ export async function GET(req: NextRequest) {
           WHEN m.contract_end_date IS NOT NULL AND m.contract_end_date != ''
           THEN CAST((julianday(m.contract_end_date) - julianday('now')) AS INTEGER)
           ELSE NULL
-        END as days_until_contract_end
+        END as days_until_contract_end,
+        CASE
+          WHEN m.incident_date IS NOT NULL AND m.incident_date != '' AND m.incident_type IN ('ROBO_ASALTO', 'PERDIDA_REPOSICION', 'MANTENIMIENTO', 'TALLER_DESPERFECTO')
+          THEN MAX(0, CAST((julianday('now') - julianday(m.incident_date)) AS INTEGER))
+          ELSE NULL
+        END as days_waiting_claro
       FROM mobile_devices m
       LEFT JOIN employees e ON m.employee_id = e.id
       LEFT JOIN departments d ON COALESCE(m.department_id, e.department_id) = d.id
@@ -35,7 +44,6 @@ export async function GET(req: NextRequest) {
     `;
     const params: any[] = [];
 
-    // Filtro Poka-Yoke: Si el usuario solo puede ver su departamento
     if (user && user.onlyOwnDepartment && user.departmentId) {
       sql += ` AND (m.department_id = ? OR e.department_id = ?)`;
       params.push(user.departmentId, user.departmentId);
@@ -50,8 +58,24 @@ export async function GET(req: NextRequest) {
     }
 
     if (carrier) {
-      sql += ` AND UPPER(m.carrier) = UPPER(?)`;
-      params.push(carrier);
+      sql += ` AND UPPER(m.carrier) LIKE UPPER(?)`;
+      params.push(`%${carrier}%`);
+    }
+
+    if (assignmentMode) {
+      sql += ` AND COALESCE(m.assignment_mode, 'EQUIPO_Y_LINEA') = ?`;
+      params.push(assignmentMode);
+    }
+
+    if (incidentFilter) {
+      if (incidentFilter === 'WAITING_CLARO') {
+        sql += ` AND m.incident_type IN ('ROBO_ASALTO', 'PERDIDA_REPOSICION')`;
+      } else if (incidentFilter === 'IN_MAINTENANCE') {
+        sql += ` AND (m.incident_type IN ('MANTENIMIENTO', 'TALLER_DESPERFECTO') OR m.status = 'EN_REPARACION')`;
+      } else {
+        sql += ` AND m.incident_type = ?`;
+        params.push(incidentFilter);
+      }
     }
 
     if (search) {
@@ -76,7 +100,6 @@ export async function GET(req: NextRequest) {
 
     const devices = await query(sql, params);
 
-    // Parsear el JSON de notes_history y filtrar por vencimiento de contrato si aplica
     let formatted = devices.map((d: any) => {
       let notes = [];
       try {
@@ -86,6 +109,9 @@ export async function GET(req: NextRequest) {
       }
       return {
         ...d,
+        carrier: d.carrier === 'Tigo' ? 'Claro Guatemala' : (d.carrier || 'Claro Guatemala'),
+        assignment_mode: d.assignment_mode || 'EQUIPO_Y_LINEA',
+        incident_type: d.incident_type || 'NINGUNO',
         monthly_cost: Number(d.monthly_cost || 0),
         notesHistory: notes,
       };
@@ -113,6 +139,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
+      assignmentMode = 'EQUIPO_Y_LINEA', // 'EQUIPO_Y_LINEA', 'SOLO_CHIP', 'PERSONAL_SIN_PLAN'
       brand,
       model,
       serialNumber,
@@ -122,38 +149,58 @@ export async function POST(req: NextRequest) {
       phoneNumber,
       imei,
       simIccid,
-      carrier = 'Tigo',
+      carrier = 'Claro Guatemala',
+      customCarrierNote,
       planName,
       monthlyCost = 0,
       contractNumber,
       contractStartDate,
       contractEndDate,
       renewalAlertDays = 30,
+      incidentType = 'NINGUNO',
+      incidentDate,
+      repairDetails,
       deliveryDate,
       initialNote,
     } = body;
 
-    // Validación Poka-Yoke
-    if (!brand || !model || !phoneNumber || !imei || !deliveryDate) {
+    if (!phoneNumber || !deliveryDate) {
       return NextResponse.json(
-        { error: 'Campos obligatorios: Marca, Modelo, Número Telefónico, IMEI y Fecha de Entrega.' },
+        { error: 'El Número Telefónico y la Fecha de Registro/Entrega son obligatorios.' },
         { status: 400 }
       );
     }
 
-    // Verificar unicidad de IMEI
+    const effectiveBrand =
+      assignmentMode === 'SOLO_CHIP'
+        ? (brand?.trim() || 'Solo Chip SIM')
+        : assignmentMode === 'PERSONAL_SIN_PLAN'
+        ? (brand?.trim() || 'Teléfono Personal')
+        : (brand?.trim() || 'Corporativo');
+
+    const effectiveModel =
+      assignmentMode === 'SOLO_CHIP'
+        ? (model?.trim() || 'Tarjeta SIM Claro')
+        : assignmentMode === 'PERSONAL_SIN_PLAN'
+        ? (model?.trim() || 'Sin Plan Corporativo')
+        : (model?.trim() || 'Estándar');
+
+    const effectiveImei =
+      imei && imei.trim()
+        ? imei.trim()
+        : `${assignmentMode === 'SOLO_CHIP' ? 'SIM' : 'PER'}-${Date.now().toString().slice(-8)}`;
+
     const existingImei = await queryOne(
       `SELECT id FROM mobile_devices WHERE imei = ?`,
-      [imei.trim()]
+      [effectiveImei]
     );
     if (existingImei) {
       return NextResponse.json(
-        { error: `El número IMEI "${imei}" ya está registrado en otro dispositivo.` },
+        { error: `El identificador IMEI/SIM "${effectiveImei}" ya está registrado en otro dispositivo.` },
         { status: 400 }
       );
     }
 
-    // Generar correlativo automático CEL-XXX seguro
     const allCodes = await query<any>(`SELECT device_code FROM mobile_devices`);
     let maxNum = 0;
     for (const c of allCodes) {
@@ -167,45 +214,66 @@ export async function POST(req: NextRequest) {
     const deviceCode = `CEL-${nextSeq}`;
     const id = `cel-${Date.now()}`;
 
-    // Historial inicial de notas
-    const notesHistory = initialNote ? [
+    const modeLabel =
+      assignmentMode === 'SOLO_CHIP'
+        ? 'Solo Chip SIM (Sin dispositivo móvil)'
+        : assignmentMode === 'PERSONAL_SIN_PLAN'
+        ? 'Número Personal del Empleado (Sin plan corporativo)'
+        : 'Equipo Móvil + Línea Corporativa';
+
+    const notesHistory = [
       {
         id: '1',
         date: deliveryDate,
-        note: initialNote.trim(),
-        author: user.fullName,
-      }
-    ] : [];
+        note: initialNote?.trim()
+          ? `[Alta: ${modeLabel}] ${initialNote.trim()}`
+          : `Alta de registro en modalidad: ${modeLabel} (${phoneNumber.trim()})`,
+        author: user.fullName || user.username,
+      },
+    ];
+
+    const effectiveStatus =
+      incidentType === 'MANTENIMIENTO' || incidentType === 'TALLER_DESPERFECTO'
+        ? 'EN_REPARACION'
+        : employeeId
+        ? 'ASIGNADO'
+        : 'DISPONIBLE';
 
     await run(
       `INSERT INTO mobile_devices (
         id, device_code, brand, model, serial_number, mac_address,
         employee_id, department_id, phone_number, imei, sim_iccid,
-        carrier, plan_name, monthly_cost, contract_number,
+        carrier, custom_carrier_note, plan_name, monthly_cost, contract_number,
         contract_start_date, contract_end_date, renewal_alert_days,
+        assignment_mode, incident_type, incident_date, repair_details,
         delivery_date, status, notes_history
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         deviceCode,
-        brand.trim(),
-        model.trim(),
+        effectiveBrand,
+        effectiveModel,
         serialNumber?.trim() || null,
         macAddress?.trim() || null,
         employeeId || null,
         departmentId || null,
         phoneNumber.trim(),
-        imei.trim(),
+        effectiveImei,
         simIccid?.trim() || null,
-        carrier?.trim() || 'Tigo',
-        planName?.trim() || null,
-        parseFloat(monthlyCost) || 0,
+        carrier?.trim() || 'Claro Guatemala',
+        customCarrierNote?.trim() || null,
+        assignmentMode === 'PERSONAL_SIN_PLAN' ? 'Sin Plan (Número Personal)' : (planName?.trim() || null),
+        assignmentMode === 'PERSONAL_SIN_PLAN' ? 0 : (parseFloat(monthlyCost) || 0),
         contractNumber?.trim() || null,
         contractStartDate || deliveryDate || null,
-        contractEndDate || null,
+        assignmentMode === 'PERSONAL_SIN_PLAN' ? null : (contractEndDate || null),
         parseInt(renewalAlertDays, 10) || 30,
+        assignmentMode,
+        incidentType || 'NINGUNO',
+        incidentDate || (incidentType !== 'NINGUNO' ? new Date().toISOString().split('T')[0] : null),
+        repairDetails?.trim() || null,
         deliveryDate,
-        employeeId ? 'ASIGNADO' : 'DISPONIBLE',
+        effectiveStatus,
         JSON.stringify(notesHistory),
       ]
     );
@@ -217,9 +285,9 @@ export async function POST(req: NextRequest) {
       action: 'CREAR_CELULAR',
       module: 'CELULARES',
       entityId: id,
-      entityName: `${deviceCode} - ${brand} ${model} (${phoneNumber})`,
-      afterState: { deviceCode, brand, model, phoneNumber, imei, carrier, contractEndDate },
-      reason: `Registro de nuevo celular y línea corporativa IMEI ${imei}`,
+      entityName: `${deviceCode} - ${effectiveBrand} ${effectiveModel} (${phoneNumber})`,
+      afterState: { deviceCode, assignmentMode, brand: effectiveBrand, model: effectiveModel, phoneNumber, imei: effectiveImei, carrier },
+      reason: `Registro de celular/línea (${modeLabel})`,
     });
 
     return NextResponse.json({ success: true, id, deviceCode });
@@ -239,6 +307,7 @@ export async function PUT(req: NextRequest) {
     const body = await req.json();
     const {
       id,
+      assignmentMode,
       brand,
       model,
       serialNumber,
@@ -249,12 +318,16 @@ export async function PUT(req: NextRequest) {
       imei,
       simIccid,
       carrier,
+      customCarrierNote,
       planName,
       monthlyCost,
       contractNumber,
       contractStartDate,
       contractEndDate,
       renewalAlertDays,
+      incidentType,
+      incidentDate,
+      repairDetails,
       deliveryDate,
       status,
       addNote,
@@ -269,7 +342,6 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Dispositivo no encontrado' }, { status: 404 });
     }
 
-    // Gestionar historial de notas
     let notes = [];
     try {
       notes = current.notes_history ? JSON.parse(current.notes_history) : [];
@@ -277,40 +349,94 @@ export async function PUT(req: NextRequest) {
       notes = [];
     }
 
-    if (addNote && addNote.trim()) {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const authorName = user.fullName || user.username;
+
+    // Registrar automáticamente en bitácora si cambió de número telefónico
+    if (phoneNumber !== undefined && phoneNumber.trim() !== current.phone_number) {
       notes.push({
-        id: Date.now().toString(),
-        date: new Date().toISOString().split('T')[0],
-        note: addNote.trim(),
-        author: user.fullName,
+        id: `${Date.now()}-num`,
+        date: todayStr,
+        note: `Cambio de número telefónico: anterior "${current.phone_number}" → nuevo "${phoneNumber.trim()}"`,
+        author: authorName,
       });
     }
 
-    // Si cambió de empleado, registrar nota automática
+    // Registrar automáticamente si se actualizó el aparato/modelo o IMEI
+    if (
+      (brand !== undefined && brand.trim() !== current.brand) ||
+      (model !== undefined && model.trim() !== current.model) ||
+      (imei !== undefined && imei.trim() !== current.imei)
+    ) {
+      notes.push({
+        id: `${Date.now()}-dev`,
+        date: todayStr,
+        note: `Actualización de equipo móvil: anterior [${current.brand} ${current.model} - IMEI ${current.imei}] → nuevo [${brand || current.brand} ${model || current.model} - IMEI ${imei || current.imei}]`,
+        author: authorName,
+      });
+    }
+
+    // Registrar automáticamente si cambió el estado de incidente (Mantenimiento / Taller / Robo o Pérdida)
+    if (incidentType !== undefined && incidentType !== (current.incident_type || 'NINGUNO')) {
+      const labels: Record<string, string> = {
+        NINGUNO: 'Operativo Normal (Incidente resuelto / Equipo entregado)',
+        MANTENIMIENTO: `En Mantenimiento (${repairDetails || 'En revisión técnica'})`,
+        TALLER_DESPERFECTO: `Devuelto al Taller por Desperfecto (${repairDetails || 'Garantía / Taller'})`,
+        ROBO_ASALTO: `Reporte por Asalto / Robo — En espera de reposición de equipo Claro (Fecha incidente: ${incidentDate || todayStr})`,
+        PERDIDA_REPOSICION: `Reporte por Pérdida / Extravío — En espera de reposición de equipo Claro (Fecha incidente: ${incidentDate || todayStr})`,
+      };
+      notes.push({
+        id: `${Date.now()}-inc`,
+        date: todayStr,
+        note: `Estado de Incidente/Soporte actualizado: ${labels[incidentType] || incidentType}`,
+        author: authorName,
+      });
+    }
+
+    // Si cambió de empleado, registrar en la bitácora
     if (employeeId !== undefined && employeeId !== current.employee_id) {
       if (employeeId) {
         const emp = await queryOne<any>(`SELECT full_name FROM employees WHERE id = ?`, [employeeId]);
         notes.push({
-          id: (Date.now() + 1).toString(),
-          date: new Date().toISOString().split('T')[0],
+          id: `${Date.now()}-emp`,
+          date: todayStr,
           note: `Reasignado a empleado: ${emp ? emp.full_name : employeeId}`,
-          author: user.fullName,
+          author: authorName,
         });
       } else {
         notes.push({
-          id: (Date.now() + 1).toString(),
-          date: new Date().toISOString().split('T')[0],
+          id: `${Date.now()}-emp`,
+          date: todayStr,
           note: `Liberado a Bodega / Disponible (sin empleado asignado)`,
-          author: user.fullName,
+          author: authorName,
         });
       }
     }
 
+    if (addNote && addNote.trim()) {
+      notes.push({
+        id: Date.now().toString(),
+        date: todayStr,
+        note: addNote.trim(),
+        author: authorName,
+      });
+    }
+
     const nextEmployeeId = employeeId !== undefined ? (employeeId || null) : current.employee_id;
-    const nextStatus = status || (nextEmployeeId ? 'ASIGNADO' : 'DISPONIBLE');
+    const nextIncidentType = incidentType !== undefined ? incidentType : (current.incident_type || 'NINGUNO');
+    const nextIncidentDate =
+      nextIncidentType === 'NINGUNO'
+        ? null
+        : (incidentDate || current.incident_date || todayStr);
+
+    let nextStatus = status || current.status || (nextEmployeeId ? 'ASIGNADO' : 'DISPONIBLE');
+    if (nextIncidentType === 'MANTENIMIENTO' || nextIncidentType === 'TALLER_DESPERFECTO') {
+      nextStatus = 'EN_REPARACION';
+    }
 
     await run(
       `UPDATE mobile_devices SET
+        assignment_mode = ?,
         brand = ?,
         model = ?,
         serial_number = ?,
@@ -321,18 +447,23 @@ export async function PUT(req: NextRequest) {
         imei = ?,
         sim_iccid = ?,
         carrier = ?,
+        custom_carrier_note = ?,
         plan_name = ?,
         monthly_cost = ?,
         contract_number = ?,
         contract_start_date = ?,
         contract_end_date = ?,
         renewal_alert_days = ?,
+        incident_type = ?,
+        incident_date = ?,
+        repair_details = ?,
         delivery_date = ?,
         status = ?,
         notes_history = ?,
         updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [
+        assignmentMode !== undefined ? assignmentMode : (current.assignment_mode || 'EQUIPO_Y_LINEA'),
         brand !== undefined ? brand.trim() : current.brand,
         model !== undefined ? model.trim() : current.model,
         serialNumber !== undefined ? (serialNumber?.trim() || null) : current.serial_number,
@@ -342,13 +473,17 @@ export async function PUT(req: NextRequest) {
         phoneNumber !== undefined ? phoneNumber.trim() : current.phone_number,
         imei !== undefined ? imei.trim() : current.imei,
         simIccid !== undefined ? (simIccid?.trim() || null) : current.sim_iccid,
-        carrier !== undefined ? (carrier?.trim() || 'Tigo') : current.carrier,
+        carrier !== undefined ? (carrier?.trim() || 'Claro Guatemala') : current.carrier,
+        customCarrierNote !== undefined ? (customCarrierNote?.trim() || null) : current.custom_carrier_note,
         planName !== undefined ? (planName?.trim() || null) : current.plan_name,
         monthlyCost !== undefined ? (parseFloat(monthlyCost) || 0) : current.monthly_cost,
         contractNumber !== undefined ? (contractNumber?.trim() || null) : current.contract_number,
         contractStartDate !== undefined ? (contractStartDate || null) : current.contract_start_date,
         contractEndDate !== undefined ? (contractEndDate || null) : current.contract_end_date,
         renewalAlertDays !== undefined ? (parseInt(renewalAlertDays, 10) || 30) : current.renewal_alert_days,
+        nextIncidentType,
+        nextIncidentDate,
+        repairDetails !== undefined ? (repairDetails?.trim() || null) : current.repair_details,
         deliveryDate || current.delivery_date,
         nextStatus,
         JSON.stringify(notes),
@@ -364,7 +499,7 @@ export async function PUT(req: NextRequest) {
       module: 'CELULARES',
       entityId: id,
       entityName: current.device_code,
-      reason: 'Actualización de datos de línea móvil, contrato o reasignación de dispositivo',
+      reason: 'Actualización de línea móvil, bitácora de empleado o estado de reposición Claro',
     });
 
     return NextResponse.json({ success: true });

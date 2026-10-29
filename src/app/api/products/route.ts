@@ -22,15 +22,31 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
       }
 
-      // Proveedores asociados
       const suppliers = await query<any>(
         `SELECT * FROM product_suppliers WHERE product_id = ? ORDER BY is_preferred DESC, supplier_name ASC`,
         [productId]
       );
 
-      // Historial de precios de compra
       const priceHistory = await query<any>(
         `SELECT * FROM product_price_history WHERE product_id = ? ORDER BY purchase_date DESC`,
+        [productId]
+      );
+
+      // Empleados y departamentos que tienen asignado este producto actualmente
+      const custodians = await query<any>(
+        `SELECT DISTINCT
+           e.id as employee_id,
+           e.full_name as employee_name,
+           e.employee_code,
+           d.id as department_id,
+           d.name as department_name,
+           d.code as department_code,
+           ii.permanent_code,
+           ii.serial_number
+         FROM inventory_items ii
+         LEFT JOIN employees e ON ii.current_employee_id = e.id
+         LEFT JOIN departments d ON COALESCE(ii.current_department_id, e.department_id) = d.id
+         WHERE ii.product_id = ? AND ii.operational_status != 'DADO_DE_BAJA'`,
         [productId]
       );
 
@@ -38,10 +54,10 @@ export async function GET(req: NextRequest) {
         product,
         suppliers,
         priceHistory,
+        custodians,
       });
     }
 
-    // Listar todos los productos incluyendo el desglose vivo: Bodega + Asignados a Empleados = Inventario Total
     const products = await query<any>(`
       SELECT p.*, c.name as category_name, c.tracking_type,
         (SELECT COUNT(*) FROM product_suppliers ps WHERE ps.product_id = p.id) as suppliers_count,
@@ -56,7 +72,33 @@ export async function GET(req: NextRequest) {
       ORDER BY p.name ASC
     `);
 
-    // Unificar métricas de stock para que Bodega + Empleados = Total sea siempre exacto
+    // Consultar asignaciones activas por producto para links rápidos a empleados y departamentos
+    const itemLinks = await query<any>(`
+      SELECT 
+        ii.product_id,
+        e.id as employee_id,
+        e.full_name as employee_name,
+        d.id as department_id,
+        d.name as department_name
+      FROM inventory_items ii
+      LEFT JOIN employees e ON ii.current_employee_id = e.id
+      LEFT JOIN departments d ON COALESCE(ii.current_department_id, e.department_id) = d.id
+      WHERE ii.operational_status != 'DADO_DE_BAJA'
+    `);
+
+    const linksByProd: Record<string, { employees: { id: string; name: string }[]; departments: { id: string; name: string }[] }> = {};
+    for (const row of itemLinks) {
+      if (!linksByProd[row.product_id]) {
+        linksByProd[row.product_id] = { employees: [], departments: [] };
+      }
+      if (row.employee_id && !linksByProd[row.product_id].employees.some((x) => x.id === row.employee_id)) {
+        linksByProd[row.product_id].employees.push({ id: row.employee_id, name: row.employee_name });
+      }
+      if (row.department_id && !linksByProd[row.product_id].departments.some((x) => x.id === row.department_id)) {
+        linksByProd[row.product_id].departments.push({ id: row.department_id, name: row.department_name });
+      }
+    }
+
     const enrichedProducts = products.map((p: any) => {
       const indTotal = Number(p.individual_total_count || 0);
       const indBodega = Number(p.individual_bodega_count || 0);
@@ -64,13 +106,14 @@ export async function GET(req: NextRequest) {
       const indRevision = Number(p.individual_revision_count || 0);
       const bulkAssigned = Number(p.bulk_assigned_count || 0);
 
-      // Stock en Bodega: si tiene activos individuales registrados en DISPONIBLE y current_stock es menor, sincronizar visualmente
       const warehouseStock = p.tracking_type === 'INDIVIDUAL' && indTotal > 0
         ? Math.max(Number(p.current_stock || 0), indBodega)
         : Number(p.current_stock || 0);
 
       const assignedToEmployees = indAssigned + bulkAssigned;
       const totalCompanyInventory = warehouseStock + assignedToEmployees + indRevision;
+      const backupThreshold = Number(p.backup_alert_threshold ?? 1);
+      const isBackupAlert = warehouseStock <= backupThreshold;
 
       return {
         ...p,
@@ -78,6 +121,9 @@ export async function GET(req: NextRequest) {
         assigned_to_employees: assignedToEmployees,
         in_revision_count: indRevision,
         total_company_inventory: totalCompanyInventory,
+        is_backup_alert: isBackupAlert,
+        assigned_employees_list: linksByProd[p.id]?.employees || [],
+        assigned_departments_list: linksByProd[p.id]?.departments || [],
       };
     });
 
@@ -103,7 +149,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      action, // 'CREATE', 'ASSIGN_TO_EMPLOYEE', 'DEDUCT_STOCK', 'ADD_SUPPLIER', 'ADD_PRICE_HISTORY'
+      action,
       categoryId,
       code,
       name,
@@ -115,10 +161,17 @@ export async function POST(req: NextRequest) {
       currentStock,
       minStock,
       targetStock,
+      backupAlertThreshold = 1,
       unitPrice,
       boxPrice,
       unitsPerBox,
       defaultSupplier,
+      supplierPhone,
+      contractNumber,
+      isRented = false,
+      rentalCost = 0,
+      rentalPeriod = 'MENSUAL',
+      rentalProvider = '',
       // Asignación directa
       productId,
       employeeId,
@@ -134,7 +187,7 @@ export async function POST(req: NextRequest) {
       invoiceNumber,
     } = body;
 
-    // 1. Asignar producto de Bodega a empleado y vincular tanto en inventario individual como stock total
+    // 1. Asignar producto de Bodega a empleado
     if (action === 'ASSIGN_TO_EMPLOYEE') {
       if (!productId || !employeeId || !quantity || quantity <= 0) {
         return NextResponse.json(
@@ -157,7 +210,6 @@ export async function POST(req: NextRequest) {
       const dept = await queryOne<any>(`SELECT code FROM departments WHERE id = ?`, [emp.department_id || 'dept-bod']);
       const qtyNum = Number(quantity);
 
-      // Verificar si hay un activo individual DISPONIBLE en Bodega de este producto
       const availableItems = await query<any>(
         `SELECT * FROM inventory_items WHERE product_id = ? AND operational_status = 'DISPONIBLE' ORDER BY created_at ASC LIMIT ?`,
         [productId, qtyNum]
@@ -175,7 +227,6 @@ export async function POST(req: NextRequest) {
       const asgId = `asg-${Date.now()}`;
 
       await transaction(async () => {
-        // Si es categoría INDIVIDUAL o hay unidades individuales disponibles, vincular o crear el inventory_item para que aparezca en el expediente del empleado
         let linkedItemId: string | null = null;
         if (availableItems.length > 0) {
           const itemToAssign = availableItems[0];
@@ -200,7 +251,6 @@ export async function POST(req: NextRequest) {
             ]
           );
         } else if (prod.tracking_type === 'INDIVIDUAL' || qtyNum === 1) {
-          // Crear el activo individual automáticamente para que el empleado lo tenga trazado con su código SIV-XX-XXXXXX
           const permCode = await generatePermanentCode(dept?.code || 'BOD');
           linkedItemId = `item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
           await run(
@@ -224,13 +274,12 @@ export async function POST(req: NextRequest) {
               prod.default_supplier || null,
               prod.unit_price || 0,
               prod.unit_price || 0,
-              reason || `Asignado desde catálogo de productos a ${emp.full_name}`,
+              reason || `Asignado desde Categorías y Productos a ${emp.full_name}`,
               user.id,
             ]
           );
         }
 
-        // Insertar asignación
         await run(
           `INSERT INTO assignments (
             id, assignment_code, item_id, product_id, employee_id, quantity,
@@ -247,20 +296,18 @@ export async function POST(req: NextRequest) {
             user.id,
             emp.department_id,
             emp.department_id,
-            reason || 'Asignación directa desde catálogo de productos',
+            reason || 'Asignación directa desde Categorías y Productos',
           ]
         );
 
-        // Restar del stock disponible en Bodega
         await run(`UPDATE products SET current_stock = ? WHERE id = ?`, [newStock, productId]);
 
-        // Registrar movimiento en Kardex
         await run(
           `INSERT INTO inventory_movements (
             id, movement_type, item_id, product_id, quantity, unit_cost, total_cost,
-            from_department_id, to_department_id, to_employee_id,
+            from_department_id, to_department_id, to_employee_id, recipient_name,
             reason, reference_code, user_id
-          ) VALUES (?, 'ASIGNACION', ?, ?, ?, ?, ?, 'dept-bod', ?, ?, ?, ?, ?)`,
+          ) VALUES (?, 'ASIGNACION', ?, ?, ?, ?, ?, 'dept-bod', ?, ?, ?, ?, ?, ?)`,
           [
             `mov-${Date.now()}`,
             linkedItemId,
@@ -270,39 +317,34 @@ export async function POST(req: NextRequest) {
             (prod.unit_price || 0) * qtyNum,
             emp.department_id,
             employeeId,
-            reason || `Asignación de ${qtyNum} unidad(es) a ${emp.full_name}`,
+            emp.full_name,
+            reason || `Asignación de ${qtyNum} ${prod.unit_of_measure || 'un.'} a ${emp.full_name}`,
             asgCode,
             user.id,
           ]
         );
       });
 
-      await logAudit({
-        userId: user.id,
-        username: user.username,
-        userRole: user.role,
-        action: 'ASIGNACION_DIRECTA_PRODUCTO',
-        module: 'PRODUCTOS',
-        entityId: productId,
-        entityName: prod.name,
-        reason: `Asignación de ${qtyNum} unidad(es) al empleado ${emp.full_name}. Stock en Bodega restante: ${newStock}`,
-      });
+      const backupAlertMsg =
+        newStock <= Number(prod.backup_alert_threshold ?? 1)
+          ? ` ⚠️ ALERTA DE BACKUP: Se ha ocupado o llegado al nivel de Backup (${newStock} restante). Solicite reposición inmediata.`
+          : '';
 
       return NextResponse.json({
         success: true,
-        message: `Asignación exitosa a ${emp.full_name} (${asgCode}). Stock en Bodega actualizado a ${newStock} unidades.`,
+        message: `Asignación exitosa a ${emp.full_name} (${asgCode}). Stock en Bodega: ${newStock}.${backupAlertMsg}`,
         newStock,
         assignmentCode: asgCode,
       });
     }
 
-    // 2. Restar stock directamente (Consumo o Ajuste autorizado)
+    // 2. Restar stock directamente (Consumo o Uso de Backup)
     if (action === 'DEDUCT_STOCK') {
       if (!productId || !quantity || quantity <= 0) {
         return NextResponse.json({ error: 'Cantidad inválida para descontar.' }, { status: 400 });
       }
       if (!reason || !reason.trim()) {
-        return NextResponse.json({ error: 'El motivo del descuento es obligatorio (Poka-Yoke).' }, { status: 400 });
+        return NextResponse.json({ error: 'El motivo del descuento/consumo es obligatorio.' }, { status: 400 });
       }
 
       const prod = await queryOne<any>(`SELECT * FROM products WHERE id = ?`, [productId]);
@@ -318,7 +360,6 @@ export async function POST(req: NextRequest) {
       const newStock = prod.current_stock - quantity;
       await run(`UPDATE products SET current_stock = ? WHERE id = ?`, [newStock, productId]);
 
-      // Registrar movimiento
       await run(
         `INSERT INTO inventory_movements (
           id, movement_type, product_id, quantity, unit_cost, total_cost,
@@ -335,18 +376,15 @@ export async function POST(req: NextRequest) {
         ]
       );
 
-      await logAudit({
-        userId: user.id,
-        username: user.username,
-        userRole: user.role,
-        action: 'DESCONTAR_STOCK',
-        module: 'PRODUCTOS',
-        entityId: productId,
-        entityName: prod.name,
-        reason: `Descuento de ${quantity} unidad(es). Motivo: ${reason.trim()}`,
+      const isUsingBackup = newStock <= Number(prod.backup_alert_threshold ?? 1);
+      return NextResponse.json({
+        success: true,
+        newStock,
+        backupAlert: isUsingBackup,
+        message: isUsingBackup
+          ? `⚠️ ATENCIÓN: Se ha utilizado la unidad de BACKUP de "${prod.name}" (Stock restante: ${newStock}). Recuerde reponer el backup en Bodega.`
+          : `Stock actualizado correctamente (${newStock} restantes).`,
       });
-
-      return NextResponse.json({ success: true, newStock });
     }
 
     // 3. Agregar Proveedor a un producto
@@ -362,7 +400,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, supplierId: supId });
     }
 
-    // 4. Agregar Historial de Precio de Compra
+    // 4. Agregar Historial de Precio
     if (action === 'ADD_PRICE_HISTORY') {
       if (!productId || !purchaseDate || !unitPrice) {
         return NextResponse.json({ error: 'Producto, fecha y precio unitario son requeridos.' }, { status: 400 });
@@ -391,7 +429,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Categoría y Nombre son obligatorios.' }, { status: 400 });
     }
 
-    // Generar código si no se envía
     let generatedCode = code;
     if (!generatedCode) {
       const cat = await queryOne<any>(`SELECT code FROM categories WHERE id = ?`, [categoryId]);
@@ -401,13 +438,19 @@ export async function POST(req: NextRequest) {
       generatedCode = `${prefix}-${nextSeq}`;
     }
 
+    const existingCode = await queryOne(`SELECT id FROM products WHERE code = ?`, [generatedCode.trim()]);
+    if (existingCode) {
+      generatedCode = `${generatedCode.trim()}-${Math.floor(10 + Math.random() * 89)}`;
+    }
+
     const newProdId = `prod-${Date.now()}`;
     await run(
       `INSERT INTO products (
         id, category_id, code, name, description, brand, model, image_url,
-        unit_of_measure, current_stock, min_stock, target_stock,
-        unit_price, box_price, units_per_box, default_supplier, is_consumable
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        unit_of_measure, current_stock, min_stock, target_stock, backup_alert_threshold,
+        unit_price, box_price, units_per_box, default_supplier, supplier_phone, contract_number,
+        is_rented, rental_cost, rental_period, rental_provider, is_consumable
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         newProdId,
         categoryId,
@@ -419,25 +462,30 @@ export async function POST(req: NextRequest) {
         imageUrl || null,
         unitOfMeasure || 'unidad',
         Number(currentStock) || 0,
-        Number(minStock) || 5,
-        Number(targetStock) || 20,
+        Number(minStock) || 2,
+        Number(targetStock) || 10,
+        Number(backupAlertThreshold) || 1,
         Number(unitPrice) || 0,
         Number(boxPrice) || 0,
         Number(unitsPerBox) || 1,
         defaultSupplier || null,
-        Number(currentStock) > 0 ? 1 : 0,
+        supplierPhone?.trim() || null,
+        contractNumber?.trim() || null,
+        isRented ? 1 : 0,
+        Number(rentalCost) || 0,
+        rentalPeriod || 'MENSUAL',
+        rentalProvider?.trim() || null,
+        ['metro', 'm2', 'cartucho', 'rollo', 'caja', 'paquete'].includes(unitOfMeasure) ? 1 : 0,
       ]
     );
 
-    // Si se especificó proveedor, registrarlo en la tabla relacional
     if (defaultSupplier) {
       await run(
-        `INSERT INTO product_suppliers (id, product_id, supplier_name, is_preferred) VALUES (?, ?, ?, 1)`,
-        [`ps-${Date.now()}`, newProdId, defaultSupplier.trim()]
+        `INSERT INTO product_suppliers (id, product_id, supplier_name, contact_info, is_preferred) VALUES (?, ?, ?, ?, 1)`,
+        [`ps-${Date.now()}`, newProdId, defaultSupplier.trim(), supplierPhone?.trim() || null]
       );
     }
 
-    // Si se especificó precio de compra inicial, registrar en historial
     if (unitPrice && Number(unitPrice) > 0) {
       await run(
         `INSERT INTO product_price_history (
@@ -454,6 +502,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Registrar movimiento de entrada inicial en kardex si tiene stock > 0
+    if (Number(currentStock) > 0) {
+      await run(
+        `INSERT INTO inventory_movements (
+          id, movement_type, product_id, quantity, unit_cost, total_cost,
+          to_department_id, recipient_name, reason, reference_code, user_id
+        ) VALUES (?, 'ENTRADA', ?, ?, ?, ?, 'dept-bod', 'Bodega Central', ?, ?, ?)`,
+        [
+          `mov-${Date.now()}`,
+          newProdId,
+          Number(currentStock),
+          Number(unitPrice) || 0,
+          (Number(unitPrice) || 0) * Number(currentStock),
+          `Alta de producto "${name.trim()}" en Categorías y Bodega`,
+          generatedCode.trim(),
+          user.id,
+        ]
+      );
+    }
+
     await logAudit({
       userId: user.id,
       username: user.username,
@@ -462,7 +530,7 @@ export async function POST(req: NextRequest) {
       module: 'PRODUCTOS',
       entityId: newProdId,
       entityName: `${generatedCode} - ${name}`,
-      reason: 'Creación de nuevo producto en catálogo con stock y precios',
+      reason: 'Creación de nuevo producto en catálogo con estructura de categoría, alquiler y backup',
     });
 
     return NextResponse.json({ success: true, id: newProdId, code: generatedCode });
@@ -498,8 +566,15 @@ export async function PUT(req: NextRequest) {
       unitsPerBox,
       minStock,
       targetStock,
+      backupAlertThreshold,
       currentStock,
       defaultSupplier,
+      supplierPhone,
+      contractNumber,
+      isRented,
+      rentalCost,
+      rentalPeriod,
+      rentalProvider,
     } = body;
 
     if (!id) {
@@ -525,8 +600,15 @@ export async function PUT(req: NextRequest) {
         units_per_box = COALESCE(?, units_per_box),
         min_stock = COALESCE(?, min_stock),
         target_stock = COALESCE(?, target_stock),
+        backup_alert_threshold = COALESCE(?, backup_alert_threshold),
         current_stock = COALESCE(?, current_stock),
-        default_supplier = COALESCE(?, default_supplier)
+        default_supplier = COALESCE(?, default_supplier),
+        supplier_phone = COALESCE(?, supplier_phone),
+        contract_number = COALESCE(?, contract_number),
+        is_rented = COALESCE(?, is_rented),
+        rental_cost = COALESCE(?, rental_cost),
+        rental_period = COALESCE(?, rental_period),
+        rental_provider = COALESCE(?, rental_provider)
       WHERE id = ?`,
       [
         name !== undefined ? name.trim() : null,
@@ -541,13 +623,19 @@ export async function PUT(req: NextRequest) {
         unitsPerBox !== undefined ? Number(unitsPerBox) : null,
         minStock !== undefined ? Number(minStock) : null,
         targetStock !== undefined ? Number(targetStock) : null,
+        backupAlertThreshold !== undefined ? Number(backupAlertThreshold) : null,
         currentStock !== undefined ? Number(currentStock) : null,
         defaultSupplier !== undefined ? defaultSupplier : null,
+        supplierPhone !== undefined ? supplierPhone : null,
+        contractNumber !== undefined ? contractNumber : null,
+        isRented !== undefined ? (isRented ? 1 : 0) : null,
+        rentalCost !== undefined ? Number(rentalCost) : null,
+        rentalPeriod || null,
+        rentalProvider !== undefined ? rentalProvider : null,
         id,
       ]
     );
 
-    // Si cambió el precio, registrar en historial de precios
     if (unitPrice !== undefined && Number(unitPrice) !== Number(existing.unit_price)) {
       await run(
         `INSERT INTO product_price_history (
@@ -572,7 +660,7 @@ export async function PUT(req: NextRequest) {
       module: 'PRODUCTOS',
       entityId: id,
       entityName: `${existing.code} - ${name || existing.name}`,
-      reason: `Modificación de parámetros del producto. Precio: Q${unitPrice || existing.unit_price}, Stock: ${currentStock ?? existing.current_stock}`,
+      reason: `Modificación de producto, alquiler o stock`,
     });
 
     return NextResponse.json({ success: true, message: 'Producto modificado exitosamente.' });
@@ -587,7 +675,7 @@ export async function DELETE(req: NextRequest) {
     const user = await getCurrentUser();
     if (!user || !canAccessModule(user, 'PRODUCTOS', 'DELETE')) {
       return NextResponse.json(
-        { error: 'Acceso denegado: Se requiere rol ADMIN o SUBADMIN con permisos de edición para eliminar productos.' },
+        { error: 'Acceso denegado: Se requiere rol ADMIN o SUBADMIN para eliminar productos.' },
         { status: 403 }
       );
     }
@@ -602,45 +690,30 @@ export async function DELETE(req: NextRequest) {
     if (!prod) return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
 
     await transaction(async () => {
-      // 1. Eliminar asignaciones vinculadas a este producto o a sus activos individuales
       await run(
         `DELETE FROM assignments 
          WHERE product_id = ? OR item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
         [id, id]
       );
-
-      // 2. Eliminar stock de consumibles
       await run(`DELETE FROM consumable_stocks WHERE product_id = ?`, [id]);
-
-      // 3. Eliminar registros de mantenimiento de sus activos
       await run(
         `DELETE FROM maintenance_records 
          WHERE item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
         [id]
       );
-
-      // 4. Eliminar registros de costos de este producto o sus activos
       await run(
         `DELETE FROM cost_records 
          WHERE product_id = ? OR item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
         [id, id]
       );
-
-      // 5. Eliminar movimientos kardex vinculados
       await run(
         `DELETE FROM inventory_movements 
          WHERE product_id = ? OR item_id IN (SELECT id FROM inventory_items WHERE product_id = ?)`,
         [id, id]
       );
-
-      // 6. Eliminar activos físicos individuales de este producto
       await run(`DELETE FROM inventory_items WHERE product_id = ?`, [id]);
-
-      // 7. Eliminar historial de precios y proveedores asociados
       await run(`DELETE FROM product_price_history WHERE product_id = ?`, [id]);
       await run(`DELETE FROM product_suppliers WHERE product_id = ?`, [id]);
-
-      // 8. Eliminar el producto
       await run(`DELETE FROM products WHERE id = ?`, [id]);
     });
 

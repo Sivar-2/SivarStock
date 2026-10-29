@@ -36,12 +36,13 @@ export default function AsignacionesPage() {
   const [employees, setEmployees] = useState<any[]>([]);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [mobileDevices, setMobileDevices] = useState<any[]>([]);
+  const [digitalServices, setDigitalServices] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [actas, setActas] = useState<any[]>([]);
   const [issuerConfig, setIssuerConfig] = useState<any>({
     issuerName: 'Alexander Turcios Melendez',
-    issuerRole: 'Jefe de IT / Administración de Inventario',
+    issuerRole: 'Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)',
   });
   const [loading, setLoading] = useState(true);
 
@@ -75,7 +76,7 @@ export default function AsignacionesPage() {
   });
   const [submittingAssign, setSubmittingAssign] = useState(false);
 
-  // Modal: Crear / Editar Empleado con DPI y Jefe Inmediato
+  // Modal: Editar Empleado existente (DPI, Jefe Inmediato, Teléfono)
   const [showNewEmpModal, setShowNewEmpModal] = useState(false);
   const [editingEmp, setEditingEmp] = useState<any | null>(null);
   const [empForm, setEmpForm] = useState({
@@ -87,27 +88,54 @@ export default function AsignacionesPage() {
     phone: '+502 ',
     departmentId: '',
     immediateSupervisorId: '',
-    companyName: 'Persiluz / SivarStock',
+    companyName: 'Fábrica de Persianas y Complementos, S.A.',
   });
 
-  // Modal: Generar Acta Digital de Entrega o Cambio de Equipo (Para enviar por WhatsApp / Firmar / Imprimir)
+  // Modal: Emisión de Acta Digital (1. Nuevos Productos, 2. Cambio de Equipo, 3. Devolución / Baja)
   const [actaModalEmp, setActaModalEmp] = useState<any | null>(null);
-  const [actaType, setActaType] = useState<'ENTREGA_INICIAL' | 'CAMBIO_EQUIPO'>('ENTREGA_INICIAL');
+  const [actaType, setActaType] = useState<'ENTREGA_INICIAL' | 'CAMBIO_EQUIPO' | 'DEVOLUCION_BAJA'>('ENTREGA_INICIAL');
+  const [actaEmpName, setActaEmpName] = useState('');
   const [actaDpi, setActaDpi] = useState('');
+  const [actaEmpPhone, setActaEmpPhone] = useState('');
+  const [actaEmpEmail, setActaEmpEmail] = useState('');
+  const [actaDeptId, setActaDeptId] = useState('');
+  const [actaDeptName, setActaDeptName] = useState('');
+  const [actaSupervisorName, setActaSupervisorName] = useState('');
   const [actaNotes, setActaNotes] = useState('');
-  const [actaItemsSelection, setActaItemsSelection] = useState<Record<string, { selected: boolean; condition: 'NUEVO' | 'USADO_BUEN_ESTADO' | 'USADO_MAL_ESTADO'; notes: string }>>({});
-  const [replacedDeviceInfo, setReplacedDeviceInfo] = useState({ code: '', name: '', serial_number: '' });
+  const [actaRefusedToSign, setActaRefusedToSign] = useState(false);
+  const [actaReturnedCondition, setActaReturnedCondition] = useState('Devuelto en buen estado operativo');
+  const [internalIsRented, setInternalIsRented] = useState(false);
+  const [internalRentalProvider, setInternalRentalProvider] = useState('');
+  const [internalSupplierNotes, setInternalSupplierNotes] = useState('');
+  const [actaItemsSelection, setActaItemsSelection] = useState<
+    Record<
+      string,
+      {
+        selected: boolean;
+        quantity: number;
+        condition: 'NUEVO' | 'USADO_BUEN_ESTADO' | 'USADO_MAL_ESTADO';
+        notes: string;
+      }
+    >
+  >({});
+  const [replacedDeviceInfo, setReplacedDeviceInfo] = useState({
+    code: '',
+    name: '',
+    serial_number: '',
+    quantity: '1',
+  });
   const [creatingActa, setCreatingActa] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [resEmp, resInv, resCel, resCat, resActas] = await Promise.all([
+      const [resEmp, resInv, resCel, resCat, resActas, resDig] = await Promise.all([
         fetch('/api/employees?all=true'),
         fetch('/api/inventory/items'),
         fetch('/api/celulares'),
         fetch('/api/catalogs'),
         fetch('/api/actas'),
+        fetch('/api/digital-services'),
       ]);
 
       const dataEmp = await resEmp.json();
@@ -115,10 +143,12 @@ export default function AsignacionesPage() {
       const dataCel = await resCel.json();
       const dataCat = await resCat.json();
       const dataActas = await resActas.json();
+      const dataDig = resDig.ok ? await resDig.json() : { services: [] };
 
       setEmployees(dataEmp.employees || []);
       setInventoryItems(dataInv.items || []);
       setMobileDevices(dataCel.devices || []);
+      setDigitalServices(dataDig.services || []);
       setDepartments(dataCat.departments || []);
       setProducts(dataCat.products || []);
       setActas(dataActas.actas || []);
@@ -158,29 +188,61 @@ export default function AsignacionesPage() {
     });
   };
 
-  // Abrir Modal de Generación de Acta Digital (Completa o por Cambio de Dispositivo)
-  const openCreateActaModal = (emp: any, mode: 'ENTREGA_INICIAL' | 'CAMBIO_EQUIPO' = 'ENTREGA_INICIAL') => {
+  // Abrir Modal de Emisión de Acta Digital (1. Nuevos Productos, 2. Cambio de Equipo, 3. Devolución / Baja)
+  const openCreateActaModal = (
+    emp: any,
+    mode: 'ENTREGA_INICIAL' | 'CAMBIO_EQUIPO' | 'DEVOLUCION_BAJA' = 'ENTREGA_INICIAL'
+  ) => {
     setActaModalEmp(emp);
     setActaType(mode);
+    setActaEmpName(emp.full_name || '');
     setActaDpi(emp.dpi || '');
+    setActaEmpPhone(emp.phone || '');
+    setActaEmpEmail(emp.email || '');
+    setActaDeptId(emp.department_id || '');
+    setActaDeptName(emp.department_name || 'General');
+    setActaSupervisorName(emp.supervisor_name || '');
     setActaNotes('');
-    setReplacedDeviceInfo({ code: '', name: '', serial_number: '' });
+    setActaRefusedToSign(false);
+    setActaReturnedCondition('Devuelto en buen estado operativo');
+    setInternalIsRented(false);
+    setInternalRentalProvider('');
+    setInternalSupplierNotes('');
+    setReplacedDeviceInfo({ code: '', name: '', serial_number: '', quantity: '1' });
 
     const allEmpDevices = [
       ...(emp.assignedItems || []).map((i: any) => ({
         key: `item-${i.id}`,
-        defaultCond: i.physical_condition === 'NUEVO' ? 'NUEVO' : i.physical_condition === 'DANADO' ? 'USADO_MAL_ESTADO' : 'USADO_BUEN_ESTADO',
+        defaultCond:
+          i.physical_condition === 'NUEVO'
+            ? 'NUEVO'
+            : i.physical_condition === 'DANADO'
+            ? 'USADO_MAL_ESTADO'
+            : 'USADO_BUEN_ESTADO',
       })),
       ...(emp.assignedMobiles || []).map((m: any) => ({
         key: `mob-${m.id}`,
         defaultCond: 'USADO_BUEN_ESTADO',
       })),
+      ...(emp.assignedLicenses || []).map((l: any) => ({
+        key: `lic-${l.id}`,
+        defaultCond: 'NUEVO',
+      })),
     ];
 
-    const initMap: Record<string, { selected: boolean; condition: 'NUEVO' | 'USADO_BUEN_ESTADO' | 'USADO_MAL_ESTADO'; notes: string }> = {};
+    const initMap: Record<
+      string,
+      {
+        selected: boolean;
+        quantity: number;
+        condition: 'NUEVO' | 'USADO_BUEN_ESTADO' | 'USADO_MAL_ESTADO';
+        notes: string;
+      }
+    > = {};
     allEmpDevices.forEach((d, idx) => {
       initMap[d.key] = {
-        selected: mode === 'ENTREGA_INICIAL' ? true : idx === 0,
+        selected: mode === 'CAMBIO_EQUIPO' ? idx === 0 : true,
+        quantity: 1,
         condition: d.defaultCond as any,
         notes: '',
       };
@@ -198,6 +260,7 @@ export default function AsignacionesPage() {
       if (sel?.selected) {
         selectedItemsList.push({
           id: item.id,
+          productId: item.product_id,
           code: item.permanent_code,
           name: item.product_name,
           brand: item.brand || '',
@@ -205,6 +268,7 @@ export default function AsignacionesPage() {
           serial_number: item.serial_number || '',
           mac_address: item.mac_address || '',
           imei: item.imei || '',
+          quantity: sel.quantity || 1,
           receive_condition: sel.condition,
           notes: sel.notes || '',
         });
@@ -217,13 +281,31 @@ export default function AsignacionesPage() {
         selectedItemsList.push({
           id: mob.id,
           code: mob.device_code,
-          name: `Celular / Línea ${mob.carrier || 'Corporativa'}`,
+          name: `Celular / Línea ${mob.carrier || 'Claro Guatemala'}`,
           brand: mob.brand || '',
           model: mob.model || '',
           serial_number: mob.serial_number || '',
           mac_address: mob.mac_address || '',
           imei: mob.imei || '',
           phone_number: mob.phone_number || '',
+          quantity: sel.quantity || 1,
+          receive_condition: sel.condition,
+          notes: sel.notes || '',
+        });
+      }
+    }
+
+    for (const lic of actaModalEmp.assignedLicenses || []) {
+      const sel = actaItemsSelection[`lic-${lic.id}`];
+      if (sel?.selected) {
+        selectedItemsList.push({
+          id: lic.id,
+          code: lic.service_code || 'LIC-DIG',
+          name: `Licencia / Servicio Digital: ${lic.name}`,
+          brand: lic.provider || '',
+          model: lic.service_type || '',
+          serial_number: lic.assigned_email || lic.license_key || 'Digital',
+          quantity: sel.quantity || 1,
           receive_condition: sel.condition,
           notes: sel.notes || '',
         });
@@ -231,9 +313,13 @@ export default function AsignacionesPage() {
     }
 
     if (selectedItemsList.length === 0) {
-      alert('Selecciona al menos un dispositivo para incluir en el Acta Digital.');
+      alert('Selecciona al menos un dispositivo o licencia para incluir en el Acta Digital.');
       return;
     }
+
+    const internalNotesCompiled = internalIsRented
+      ? `[CONTROL INTERNO ALQUILER] Proveedor: ${internalRentalProvider || 'No especificado'} | Detalles: ${internalSupplierNotes || 'N/A'}`
+      : internalSupplierNotes || null;
 
     setCreatingActa(true);
     try {
@@ -244,18 +330,22 @@ export default function AsignacionesPage() {
           actaType,
           employeeId: actaModalEmp.id,
           employeeCode: actaModalEmp.employee_code,
-          employeeName: actaModalEmp.full_name,
+          employeeName: actaEmpName.trim() || actaModalEmp.full_name,
           employeeDpi: actaDpi.trim() || null,
-          employeeEmail: actaModalEmp.email || null,
-          employeePhone: actaModalEmp.phone || null,
-          departmentName: actaModalEmp.department_name || 'General',
-          supervisorName: actaModalEmp.supervisor_name || null,
+          employeeEmail: actaEmpEmail.trim() || null,
+          employeePhone: actaEmpPhone.trim() || null,
+          departmentId: actaDeptId || actaModalEmp.department_id || null,
+          departmentName: actaDeptName || actaModalEmp.department_name || 'General',
+          supervisorName: actaSupervisorName.trim() || null,
           items: selectedItemsList,
           replacedItem:
             actaType === 'CAMBIO_EQUIPO' && (replacedDeviceInfo.code || replacedDeviceInfo.name)
               ? replacedDeviceInfo
               : null,
           notes: actaNotes.trim() || null,
+          refusedToSign: actaType === 'DEVOLUCION_BAJA' ? actaRefusedToSign : false,
+          returnedCondition: actaType === 'DEVOLUCION_BAJA' ? actaReturnedCondition : '',
+          internalAdminNotes: internalNotesCompiled,
         }),
       });
 
@@ -266,19 +356,24 @@ export default function AsignacionesPage() {
 
       if (sendWhatsAppAfter) {
         const condLabel = (c: string) =>
-          c === 'NUEVO' ? 'Nuevo' : c === 'USADO_MAL_ESTADO' ? 'Usado en mal estado' : 'Usado en buen estado';
+          c === 'NUEVO' ? 'Nuevo' : c === 'USADO_MAL_ESTADO' ? 'Usado - malas condiciones' : 'Usado en buen estado';
         const itemsText = selectedItemsList
-          .map((i) => `• ${i.name} (${i.code}) - Recibe: ${condLabel(i.receive_condition)}`)
+          .map((i) => `• ${i.quantity || 1}x ${i.name} (${i.code}) - Condición: ${condLabel(i.receive_condition)}`)
           .join('\n');
 
-        const waMsg =
-          `Hola *${actaModalEmp.full_name}*, te comparto tu *${
-            actaType === 'CAMBIO_EQUIPO' ? 'Acta por Cambio de Dispositivo' : 'Acta Digital de Entrega de Equipos'
-          } (${data.actaCode})* emitida por *${issuerConfig.issuerName}*.\n\n` +
-          `*Dispositivos registrados:*\n${itemsText}\n\n` +
-          `Por favor ingresa al siguiente enlace para revisarla y firmarla digitalmente desde tu teléfono:\n${shareUrl}`;
+        const actaTitleLabel =
+          actaType === 'CAMBIO_EQUIPO'
+            ? 'Acta por Cambio de Dispositivo'
+            : actaType === 'DEVOLUCION_BAJA'
+            ? 'Acta de Devolución / Baja de Equipos'
+            : 'Acta Digital de Entrega de Equipos';
 
-        const cleanPhone = (actaModalEmp.phone || '').replace(/[^0-9]/g, '');
+        const waMsg =
+          `Hola *${actaEmpName || actaModalEmp.full_name}*, te comparto tu *${actaTitleLabel} (${data.actaCode})* de *Fábrica de Persianas y Complementos, S.A.* emitida por *${issuerConfig.issuerName}*.\n\n` +
+          `*Detalle registrado:*\n${itemsText}\n\n` +
+          `Por favor ingresa al siguiente enlace para revisarla y firmarla electrónicamente desde tu teléfono:\n${shareUrl}`;
+
+        const cleanPhone = (actaEmpPhone || actaModalEmp.phone || '').replace(/[^0-9]/g, '');
         const waUrl = cleanPhone
           ? `https://wa.me/${cleanPhone.startsWith('502') ? cleanPhone : `502${cleanPhone}`}?text=${encodeURIComponent(waMsg)}`
           : `https://wa.me/?text=${encodeURIComponent(waMsg)}`;
@@ -498,13 +593,17 @@ export default function AsignacionesPage() {
       const assignedMobiles = mobileDevices.filter(
         (m) => m.employee_id === emp.id && m.status !== 'DADO_DE_BAJA'
       );
+      const assignedLicenses = digitalServices.filter(
+        (s) => s.assigned_employee_id === emp.id || (emp.email && s.assigned_email === emp.email)
+      );
       const empActas = actas.filter((a) => a.employee_id === emp.id);
       return {
         ...emp,
         assignedItems,
         assignedMobiles,
+        assignedLicenses,
         empActas,
-        totalAssets: assignedItems.length + assignedMobiles.length,
+        totalAssets: assignedItems.length + assignedMobiles.length + assignedLicenses.length,
       };
     });
 
@@ -532,11 +631,23 @@ export default function AsignacionesPage() {
       employee_dpi: emp.dpi || 'S/R',
       department_name: emp.department_name || 'Sin Área',
       supervisor_name: emp.supervisor_name || 'Directo',
-      asset_type: `CELULAR (${mob.carrier || 'Tigo'})`,
+      asset_type: `CELULAR (${mob.carrier || 'Claro Guatemala'})`,
       code: mob.device_code,
       description: `${mob.brand} ${mob.model} • ${mob.phone_number}`,
-      serial_or_imei: `IMEI: ${mob.imei}${mob.contract_end_date ? ` | Vence: ${mob.contract_end_date}` : ''}`,
+      serial_or_imei: `IMEI: ${mob.imei}${mob.contract_end_date && mob.assignment_mode !== 'PERSONAL_SIN_PLAN' ? ` | Vence Contrato: ${mob.contract_end_date}` : ''}`,
       status: mob.status,
+    })),
+    ...emp.assignedLicenses.map((lic: any) => ({
+      employee_code: emp.employee_code,
+      employee_name: emp.full_name,
+      employee_dpi: emp.dpi || 'S/R',
+      department_name: emp.department_name || 'Sin Área',
+      supervisor_name: emp.supervisor_name || 'Directo',
+      asset_type: 'LICENCIA DIGITAL',
+      code: lic.service_code || 'LIC-DIG',
+      description: `${lic.name} (${lic.provider || ''})`,
+      serial_or_imei: lic.no_expiration ? 'Sin renovación / Perpetua' : `Vence: ${lic.expiration_date || 'N/A'}`,
+      status: lic.status || 'ACTIVO',
     })),
   ]);
 
@@ -594,15 +705,15 @@ export default function AsignacionesPage() {
 
   return (
     <div className="space-y-6">
-      {/* Cabecera */}
+      {/* Cabecera (Sin botón de crear nuevo empleado aquí: solo en Áreas y Empleados) */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2.5">
             <UserCheck className="h-7 w-7 text-military-700" />
-            Empleados, Equipos Asignados y Actas Digitales (WhatsApp)
+            Asignaciones a Personal y Emisión de Actas Digitales
           </h1>
           <p className="text-sm text-slate-500">
-            Base de datos de empleados con DPI, jefe inmediato, teléfonos y generación de <strong>Actas Digitales con Firma Electrónica</strong>.
+            Asignación de bienes y licencias a empleados • Actas Oficiales de <strong>Nuevos Productos</strong>, <strong>Cambio de Dispositivo</strong> y <strong>Devolución / Baja</strong>.
           </p>
         </div>
 
@@ -619,26 +730,13 @@ export default function AsignacionesPage() {
           >
             <FileText className="h-4 w-4 text-rose-600" /> PDF
           </button>
-          <button
-            onClick={() => {
-              setEditingEmp(null);
-              setEmpForm({
-                employeeCode: '',
-                fullName: '',
-                dpi: '',
-                jobTitle: '',
-                email: '',
-                phone: '+502 ',
-                departmentId: '',
-                immediateSupervisorId: '',
-                companyName: 'Persiluz / SivarStock',
-              });
-              setShowNewEmpModal(true);
-            }}
-            className="flex items-center gap-1.5 rounded-xl bg-military-700 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-military-800 transition"
+          <Link
+            href="/departamentos"
+            className="flex items-center gap-1.5 rounded-xl border border-military-200 bg-military-50 px-3.5 py-2 text-xs font-bold text-military-800 hover:bg-military-100 transition"
+            title="Para agregar nuevos empleados, hazlo desde Áreas y Empleados"
           >
-            <UserPlus className="h-4 w-4" /> Nuevo Empleado
-          </button>
+            <Building2 className="h-4 w-4" /> Gestionar Personal en Áreas y Empleados
+          </Link>
         </div>
       </div>
 
@@ -937,14 +1035,14 @@ export default function AsignacionesPage() {
                     </div>
                   )}
 
-                  {/* Celulares Corporativos Asignados */}
+                  {/* Celulares Corporativos Asignados (Con vencimiento de contrato si aplica) */}
                   <div className="pt-2 text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                     <Smartphone className="h-3.5 w-3.5 text-emerald-600" />
                     Celulares y Líneas Móviles ({emp.assignedMobiles.length})
                   </div>
 
                   {emp.assignedMobiles.length === 0 ? (
-                    <p className="text-xs italic text-slate-400 pl-5">Sin línea móvil corporativa asignada.</p>
+                    <p className="text-xs italic text-slate-400 pl-5">Sin línea móvil asignada.</p>
                   ) : (
                     <div className="space-y-1.5">
                       {emp.assignedMobiles.map((mob: any) => (
@@ -956,23 +1054,58 @@ export default function AsignacionesPage() {
                             <span className="font-mono font-bold text-emerald-800">{mob.device_code}</span>
                             <span className="mx-1.5 text-emerald-300">•</span>
                             <span className="font-semibold text-slate-900">
-                              {mob.brand} {mob.model} ({mob.carrier || 'Tigo'})
+                              {mob.brand} {mob.model} ({mob.carrier || 'Claro Guatemala'})
                             </span>
                             <div className="text-[11px] text-emerald-700 font-medium">
-                              Línea: {mob.phone_number} • IMEI: <span className="font-mono">{mob.imei}</span>
-                              {mob.contract_end_date && ` • Vence: ${mob.contract_end_date}`}
+                              Línea: {mob.phone_number} • IMEI: <span className="font-mono">{mob.imei || 'Solo Chip'}</span>
+                              {mob.assignment_mode !== 'PERSONAL_SIN_PLAN' && mob.contract_end_date
+                                ? ` • Vence Plan: ${mob.contract_end_date}`
+                                : mob.assignment_mode === 'PERSONAL_SIN_PLAN'
+                                ? ' • Número Personal (Sin Plan)'
+                                : ''}
                             </div>
                           </div>
                           <span className="text-[10px] font-bold text-emerald-700 bg-white px-2 py-0.5 rounded border border-emerald-200">
-                            {mob.delivery_date}
+                            {mob.assignment_mode === 'SOLO_CHIP' ? 'Solo Chip' : 'Teléfono'}
                           </span>
                         </div>
                       ))}
                     </div>
                   )}
+
+                  {/* Licencias y Servicios Digitales Asignados (Con vencimiento o Sin renovación) */}
+                  {emp.assignedLicenses && emp.assignedLicenses.length > 0 && (
+                    <>
+                      <div className="pt-2 text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <FileText className="h-3.5 w-3.5 text-indigo-600" />
+                        Licencias y Accesos Digitales ({emp.assignedLicenses.length})
+                      </div>
+                      <div className="space-y-1.5">
+                        {emp.assignedLicenses.map((lic: any) => (
+                          <div
+                            key={lic.id}
+                            className="flex items-center justify-between rounded-xl bg-indigo-50/50 px-3 py-2 text-xs border border-indigo-100"
+                          >
+                            <div>
+                              <span className="font-mono font-bold text-indigo-800">{lic.service_code || 'LIC'}</span>
+                              <span className="mx-1.5 text-indigo-300">•</span>
+                              <span className="font-semibold text-slate-900">{lic.name}</span>
+                              <div className="text-[11px] text-indigo-700">
+                                {lic.no_expiration ? (
+                                  <span className="font-bold">Sin renovación / Perpetua</span>
+                                ) : (
+                                  <span>Vencimiento: <strong>{lic.expiration_date || 'Sin fecha'}</strong></span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {/* Barra Inferior de Actas Digitales y Envío por WhatsApp */}
+                {/* Barra Inferior de Emisión de Acta Digital (Nuevos Productos, Cambio, Devolución/Baja) */}
                 <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-[11px]">
                     {emp.empActas?.some((a: any) => a.status === 'FIRMADA') ? (
@@ -994,19 +1127,29 @@ export default function AsignacionesPage() {
                       <button
                         type="button"
                         onClick={() => openCreateActaModal(emp, 'ENTREGA_INICIAL')}
-                        className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 shadow-sm transition"
+                        className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-800 shadow-sm transition"
+                        title="Emitir Acta Oficial de Nuevos Productos, Cambio o Devolución"
                       >
-                        <Share2 className="h-3 w-3" />
-                        <span>Acta Digital / WhatsApp</span>
+                        <FileSignature className="h-3.5 w-3.5" />
+                        <span>Emisión de Acta</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => openCreateActaModal(emp, 'CAMBIO_EQUIPO')}
-                        className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-900 hover:bg-amber-100 transition"
-                        title="Generar acta únicamente por el dispositivo que se cambió"
+                        className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] font-bold text-amber-900 hover:bg-amber-100 transition"
+                        title="Acta de Cambio de Dispositivo"
                       >
                         <RefreshCw className="h-3 w-3" />
-                        <span>Acta Cambio Equipo</span>
+                        <span>Cambio</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openCreateActaModal(emp, 'DEVOLUCION_BAJA')}
+                        className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-2 py-1.5 text-[11px] font-bold text-rose-900 hover:bg-rose-100 transition"
+                        title="Acta de Devolución / Baja de Equipos"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        <span>Devolución / Baja</span>
                       </button>
                     </div>
                   )}
@@ -1246,22 +1389,24 @@ export default function AsignacionesPage() {
         </div>
       )}
 
-      {/* MODAL GENERAR ACTA DIGITAL DE ENTREGA O CAMBIO DE DISPOSITIVO (WHATSAPP / FIRMA) */}
+      {/* MODAL DE EMISIÓN DE ACTA DIGITAL (1. NUEVOS PRODUCTOS, 2. CAMBIO DE DISPOSITIVO, 3. DEVOLUCIÓN / BAJA) */}
       {actaModalEmp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
+          <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl max-h-[93vh] overflow-y-auto">
             <div className="flex items-start justify-between border-b border-slate-100 pb-4">
               <div>
-                <span className="font-mono text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                  ACTA DIGITAL CON FIRMA ELECTRÓNICA
+                <span className="font-mono text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded">
+                  FÁBRICA DE PERSIANAS Y COMPLEMENTOS, S.A. — EMISIÓN DE ACTA DIGITAL
                 </span>
                 <h2 className="text-lg font-bold text-slate-900 mt-1">
                   {actaType === 'CAMBIO_EQUIPO'
-                    ? `Acta por Cambio de Dispositivo — ${actaModalEmp.full_name}`
-                    : `Acta de Entrega de Equipos — ${actaModalEmp.full_name}`}
+                    ? `Acta por Cambio de Dispositivo — ${actaEmpName || actaModalEmp.full_name}`
+                    : actaType === 'DEVOLUCION_BAJA'
+                    ? `Acta de Devolución / Baja de Equipos — ${actaEmpName || actaModalEmp.full_name}`
+                    : `Acta de Entrega de Nuevos Productos — ${actaEmpName || actaModalEmp.full_name}`}
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Entregado por: <strong>{issuerConfig.issuerName}</strong> • Fecha automática:{' '}
+                  Entregado conforme por: <strong>{issuerConfig.issuerName}</strong> (Especialista de Tecnología, Sistemas e Innovación) • Fecha:{' '}
                   <strong>{new Date().toLocaleDateString('es-GT')}</strong>
                 </p>
               </div>
@@ -1271,64 +1416,135 @@ export default function AsignacionesPage() {
             </div>
 
             <div className="mt-4 space-y-4">
-              {/* Selector de Tipo de Acta */}
-              <div className="grid grid-cols-2 gap-2">
+              {/* Selector de las 3 Modalidades de Acta */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => openCreateActaModal(actaModalEmp, 'ENTREGA_INICIAL')}
                   className={`rounded-xl border p-3 text-left text-xs transition ${
                     actaType === 'ENTREGA_INICIAL'
-                      ? 'border-military-700 bg-military-50/70 font-bold text-military-900'
-                      : 'border-slate-200 bg-white text-slate-600'
+                      ? 'border-emerald-700 bg-emerald-50/80 font-bold text-emerald-950 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  <div className="font-black">1. Acta de Entrega General</div>
-                  <div className="text-[11px] opacity-80">Incluye todos los dispositivos entregados al empleado</div>
+                  <div className="font-black">1. Acta de Nuevos Productos</div>
+                  <div className="text-[11px] opacity-80">Selecciona los bienes o licencias entregados al colaborador</div>
                 </button>
                 <button
                   type="button"
                   onClick={() => openCreateActaModal(actaModalEmp, 'CAMBIO_EQUIPO')}
                   className={`rounded-xl border p-3 text-left text-xs transition ${
                     actaType === 'CAMBIO_EQUIPO'
-                      ? 'border-amber-600 bg-amber-50 font-bold text-amber-900'
-                      : 'border-slate-200 bg-white text-slate-600'
+                      ? 'border-amber-600 bg-amber-50 font-bold text-amber-950 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  <div className="font-black">2. Acta por Cambio de Dispositivo</div>
-                  <div className="text-[11px] opacity-80">Muestra únicamente el dispositivo que se cambió</div>
+                  <div className="font-black">2. Acta de Cambio de Equipo</div>
+                  <div className="text-[11px] opacity-80">Constancia de cambio de dispositivo (conectada con Movimientos)</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCreateActaModal(actaModalEmp, 'DEVOLUCION_BAJA')}
+                  className={`rounded-xl border p-3 text-left text-xs transition ${
+                    actaType === 'DEVOLUCION_BAJA'
+                      ? 'border-rose-600 bg-rose-50 font-bold text-rose-950 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-black">3. Acta de Devolución / Baja</div>
+                  <div className="text-[11px] opacity-80">Por renuncia o devolución (con opción si no quiso firmar)</div>
                 </button>
               </div>
 
-              {/* Datos de Identificación del Empleado (DPI) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3.5 border border-slate-200 text-xs">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Nombre Completo del Empleado</label>
-                  <input
-                    type="text"
-                    disabled
-                    value={actaModalEmp.full_name}
-                    className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 font-bold text-slate-800"
-                  />
+              {/* Datos Editables del Empleado Receptor (Permite corregir o completar antes de emitir el Acta) */}
+              <div className="rounded-xl bg-slate-50 p-4 border border-slate-200 text-xs space-y-3">
+                <div className="font-black uppercase tracking-wider text-slate-700 flex items-center justify-between">
+                  <span>Datos del Colaborador Receptor (Editables si requiere ajuste)</span>
+                  <span className="text-[10px] font-semibold text-emerald-700">Se sincroniza automáticamente con su ficha</span>
                 </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Número de DPI del Empleado *</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. 2456 78901 0101"
-                    value={actaDpi}
-                    onChange={(e) => setActaDpi(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono font-bold text-slate-900 focus:border-military-700 focus:outline-none"
-                  />
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Nombre Completo *</label>
+                    <input
+                      type="text"
+                      value={actaEmpName}
+                      onChange={(e) => setActaEmpName(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-bold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Número de DPI *</label>
+                    <input
+                      type="text"
+                      placeholder="Ej. 2456 78901 0101"
+                      value={actaDpi}
+                      onChange={(e) => setActaDpi(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono font-bold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Teléfono / WhatsApp</label>
+                    <input
+                      type="text"
+                      placeholder="+502 5555-0000"
+                      value={actaEmpPhone}
+                      onChange={(e) => setActaEmpPhone(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Correo Electrónico</label>
+                    <input
+                      type="email"
+                      placeholder="colaborador@grupofpc.com"
+                      value={actaEmpEmail}
+                      onChange={(e) => setActaEmpEmail(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Departamento / Área</label>
+                    <select
+                      value={actaDeptId}
+                      onChange={(e) => {
+                        const d = departments.find((x) => x.id === e.target.value);
+                        setActaDeptId(e.target.value);
+                        if (d) setActaDeptName(d.name);
+                      }}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-slate-900"
+                    >
+                      <option value="">{actaDeptName || 'General'}</option>
+                      {departments.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Jefe Inmediato</label>
+                    <input
+                      type="text"
+                      placeholder="Nombre del jefe inmediato"
+                      value={actaSupervisorName}
+                      onChange={(e) => setActaSupervisorName(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-slate-900"
+                    />
+                  </div>
                 </div>
               </div>
 
-              {/* Si es Acta por Cambio de Equipo, permitir anotar qué equipo anterior fue reemplazado */}
+              {/* Si es Acta por Cambio de Equipo, anotar qué producto anterior fue reemplazado */}
               {actaType === 'CAMBIO_EQUIPO' && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3.5 space-y-2 text-xs">
-                  <span className="font-bold text-amber-900 block">
-                    Datos del Dispositivo Anterior que se Reemplazó / Cambió (Opcional):
+                <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3.5 space-y-2 text-xs">
+                  <span className="font-bold text-amber-950 block">
+                    Datos del Dispositivo Anterior Reemplazado (Se registrará automáticamente en Entradas y Movimientos):
                   </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                     <input
                       type="text"
                       placeholder="Código ant. (ej. SIV-IT-0001)"
@@ -1338,7 +1554,7 @@ export default function AsignacionesPage() {
                     />
                     <input
                       type="text"
-                      placeholder="Equipo ant. (ej. Laptop HP)"
+                      placeholder="Producto anterior (ej. Laptop HP)"
                       value={replacedDeviceInfo.name}
                       onChange={(e) => setReplacedDeviceInfo({ ...replacedDeviceInfo, name: e.target.value })}
                       className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5"
@@ -1350,20 +1566,95 @@ export default function AsignacionesPage() {
                       onChange={(e) => setReplacedDeviceInfo({ ...replacedDeviceInfo, serial_number: e.target.value })}
                       className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 font-mono"
                     />
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="Cant."
+                      value={replacedDeviceInfo.quantity}
+                      onChange={(e) => setReplacedDeviceInfo({ ...replacedDeviceInfo, quantity: e.target.value })}
+                      className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 font-mono"
+                    />
                   </div>
                 </div>
               )}
 
-              {/* Selección de Dispositivos y Situación en que Reciben el Producto */}
+              {/* Si es Acta de Devolución / Baja */}
+              {actaType === 'DEVOLUCION_BAJA' && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3.5 space-y-3 text-xs">
+                  <div>
+                    <label className="font-bold text-rose-950 block mb-1">
+                      Estado General en que el Colaborador Devuelve los Equipos:
+                    </label>
+                    <input
+                      type="text"
+                      value={actaReturnedCondition}
+                      onChange={(e) => setActaReturnedCondition(e.target.value)}
+                      placeholder="Ej. Equipos recibidos completos y funcionales / Pantalla rayada..."
+                      className="w-full rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-slate-900"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2.5 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={actaRefusedToSign}
+                      onChange={(e) => setActaRefusedToSign(e.target.checked)}
+                      className="h-4 w-4 rounded border-rose-400 text-rose-700"
+                    />
+                    <span className="font-bold text-rose-900">
+                      Dejar constancia de que el empleado NO quiso firmar el acta de devolución / baja
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {/* Opción Interna Exclusiva de Administración: ¿Es producto alquilado? (No aparece en el PDF impreso del empleado) */}
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3.5 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 font-bold text-indigo-950 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={internalIsRented}
+                      onChange={(e) => setInternalIsRented(e.target.checked)}
+                      className="h-4 w-4 rounded border-indigo-300 text-indigo-600"
+                    />
+                    <span>Control Interno IT: ¿Incluye equipo alquilado o de proveedor externo? (Oculto en acta impresa)</span>
+                  </label>
+                </div>
+                {internalIsRented && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <input
+                      type="text"
+                      placeholder="Empresa proveedora de alquiler (ej. Ricoh, Intcomex...)"
+                      value={internalRentalProvider}
+                      onChange={(e) => setInternalRentalProvider(e.target.value)}
+                      className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Detalles internos de contrato / tarifa mensual..."
+                      value={internalSupplierNotes}
+                      onChange={(e) => setInternalSupplierNotes(e.target.value)}
+                      className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Selección de Dispositivos / Licencias, Unidades y Condición */}
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-2">
-                  Selecciona los dispositivos a incluir y en qué situación los recibe el empleado:
+                  Selecciona los bienes o licencias a incluir en el acta, sus unidades y condición:
                 </label>
 
                 <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {(actaModalEmp.assignedItems || []).map((item: any) => {
                     const key = `item-${item.id}`;
-                    const state = actaItemsSelection[key] || { selected: true, condition: 'USADO_BUEN_ESTADO', notes: '' };
+                    const state = actaItemsSelection[key] || {
+                      selected: true,
+                      quantity: 1,
+                      condition: 'USADO_BUEN_ESTADO',
+                      notes: '',
+                    };
                     return (
                       <div
                         key={key}
@@ -1394,7 +1685,21 @@ export default function AsignacionesPage() {
                         </label>
 
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-semibold text-slate-600">Recibe:</span>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[11px] font-semibold text-slate-600">Unid:</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={state.quantity || 1}
+                              onChange={(e) =>
+                                setActaItemsSelection({
+                                  ...actaItemsSelection,
+                                  [key]: { ...state, quantity: Math.max(1, Number(e.target.value) || 1) },
+                                })
+                              }
+                              className="w-14 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-mono text-xs font-bold"
+                            />
+                          </div>
                           <select
                             value={state.condition}
                             onChange={(e) =>
@@ -1407,7 +1712,7 @@ export default function AsignacionesPage() {
                           >
                             <option value="NUEVO">Nuevo</option>
                             <option value="USADO_BUEN_ESTADO">Usado en buen estado</option>
-                            <option value="USADO_MAL_ESTADO">Usado en mal estado</option>
+                            <option value="USADO_MAL_ESTADO">Usado - malas condiciones</option>
                           </select>
                         </div>
                       </div>
@@ -1416,7 +1721,12 @@ export default function AsignacionesPage() {
 
                   {(actaModalEmp.assignedMobiles || []).map((mob: any) => {
                     const key = `mob-${mob.id}`;
-                    const state = actaItemsSelection[key] || { selected: true, condition: 'USADO_BUEN_ESTADO', notes: '' };
+                    const state = actaItemsSelection[key] || {
+                      selected: true,
+                      quantity: 1,
+                      condition: 'USADO_BUEN_ESTADO',
+                      notes: '',
+                    };
                     return (
                       <div
                         key={key}
@@ -1447,7 +1757,21 @@ export default function AsignacionesPage() {
                         </label>
 
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-semibold text-slate-600">Recibe:</span>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[11px] font-semibold text-slate-600">Unid:</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={state.quantity || 1}
+                              onChange={(e) =>
+                                setActaItemsSelection({
+                                  ...actaItemsSelection,
+                                  [key]: { ...state, quantity: Math.max(1, Number(e.target.value) || 1) },
+                                })
+                              }
+                              className="w-14 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-mono text-xs font-bold"
+                            />
+                          </div>
                           <select
                             value={state.condition}
                             onChange={(e) =>
@@ -1460,7 +1784,79 @@ export default function AsignacionesPage() {
                           >
                             <option value="NUEVO">Nuevo</option>
                             <option value="USADO_BUEN_ESTADO">Usado en buen estado</option>
-                            <option value="USADO_MAL_ESTADO">Usado en mal estado</option>
+                            <option value="USADO_MAL_ESTADO">Usado - malas condiciones</option>
+                          </select>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {(actaModalEmp.assignedLicenses || []).map((lic: any) => {
+                    const key = `lic-${lic.id}`;
+                    const state = actaItemsSelection[key] || {
+                      selected: true,
+                      quantity: 1,
+                      condition: 'NUEVO',
+                      notes: '',
+                    };
+                    return (
+                      <div
+                        key={key}
+                        className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border p-3 text-xs ${
+                          state.selected ? 'border-indigo-600 bg-indigo-50/30' : 'border-slate-200 bg-slate-50 opacity-60'
+                        }`}
+                      >
+                        <label className="flex items-start gap-2.5 cursor-pointer flex-1">
+                          <input
+                            type="checkbox"
+                            checked={state.selected}
+                            onChange={(e) =>
+                              setActaItemsSelection({
+                                ...actaItemsSelection,
+                                [key]: { ...state, selected: e.target.checked },
+                              })
+                            }
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-700"
+                          />
+                          <div>
+                            <div className="font-bold text-slate-900">
+                              <span className="font-mono text-indigo-800">{lic.service_code || 'LIC'}</span> — Licencia {lic.name}
+                            </div>
+                            <div className="font-mono text-[11px] text-slate-500">
+                              {lic.provider || 'Software'} • {lic.no_expiration ? 'Sin renovación' : `Vence: ${lic.expiration_date || 'N/A'}`}
+                            </div>
+                          </div>
+                        </label>
+
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[11px] font-semibold text-slate-600">Unid:</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={state.quantity || 1}
+                              onChange={(e) =>
+                                setActaItemsSelection({
+                                  ...actaItemsSelection,
+                                  [key]: { ...state, quantity: Math.max(1, Number(e.target.value) || 1) },
+                                })
+                              }
+                              className="w-14 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-mono text-xs font-bold"
+                            />
+                          </div>
+                          <select
+                            value={state.condition}
+                            onChange={(e) =>
+                              setActaItemsSelection({
+                                ...actaItemsSelection,
+                                [key]: { ...state, condition: e.target.value as any },
+                              })
+                            }
+                            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-900"
+                          >
+                            <option value="NUEVO">Nuevo</option>
+                            <option value="USADO_BUEN_ESTADO">Usado en buen estado</option>
+                            <option value="USADO_MAL_ESTADO">Usado - malas condiciones</option>
                           </select>
                         </div>
                       </div>
@@ -1471,7 +1867,7 @@ export default function AsignacionesPage() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Observaciones de Entrega (Cargador original, estuche, detalles estéticos, etc.):
+                  Observaciones de Entrega / Recepción (Cargador original, estuche, detalles estéticos, etc.):
                 </label>
                 <input
                   type="text"
@@ -1482,9 +1878,9 @@ export default function AsignacionesPage() {
                 />
               </div>
 
-              {/* Previsualización de Nota Legal */}
-              <div className="rounded-xl bg-slate-50 p-3 border border-slate-200 text-[11px] text-slate-600 italic">
-                &ldquo;Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado en su correo electrónico. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.&rdquo;
+              {/* Previsualización de Nota Legal Oficial */}
+              <div className="rounded-xl bg-slate-50 p-3 border border-slate-200 text-[11px] text-slate-700 italic">
+                &ldquo;Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.&rdquo;
               </div>
 
               <div className="flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100">
@@ -1502,7 +1898,7 @@ export default function AsignacionesPage() {
                   className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50"
                 >
                   <Printer className="h-4 w-4" />
-                  <span>Generar y Firmar / Imprimir Aquí</span>
+                  <span>Generar y Ver / Firmar / Imprimir PDF</span>
                 </button>
                 <button
                   type="button"

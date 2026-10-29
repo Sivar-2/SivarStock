@@ -41,7 +41,7 @@ interface SidebarProps {
 
 export const allNavigationItems = [
   { name: 'Inicio / Dashboard', href: '/', icon: LayoutDashboard, tabKey: 'DASHBOARD' },
-  { name: 'Inventario físico', href: '/inventario', icon: Boxes, tabKey: 'INVENTARIO' },
+  { name: 'Bodega', href: '/inventario', icon: Boxes, tabKey: 'INVENTARIO' },
   { name: 'Celulares y líneas', href: '/celulares', icon: Smartphone, tabKey: 'CELULARES' },
   { name: 'Categorías y productos', href: '/productos', icon: Layers, tabKey: 'PRODUCTOS' },
   { name: 'Entradas y movimientos', href: '/movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS' },
@@ -52,7 +52,7 @@ export const allNavigationItems = [
   { name: 'Reportes y métricas', href: '/reportes', icon: FileBarChart2, tabKey: 'REPORTES' },
   { name: 'Áreas y empleados', href: '/departamentos', icon: Building2, tabKey: 'DEPARTAMENTOS' },
   { name: 'Usuarios y permisos', href: '/usuarios', icon: Users, tabKey: 'USUARIOS', adminOnly: true },
-  { name: 'Historial de auditoría', href: '/auditoria', icon: History, tabKey: 'AUDITORIA', adminOnly: true },
+  { name: 'Bitácora', href: '/auditoria', icon: History, tabKey: 'AUDITORIA', superAdminOnly: true },
   { name: 'Configuración', href: '/configuracion', icon: Settings, tabKey: 'CONFIGURACION' },
 ];
 
@@ -86,6 +86,9 @@ export default function Sidebar({
     : [];
 
   const visibleItems = allNavigationItems.filter((item) => {
+    if ((item as any).superAdminOnly) {
+      return currentUser?.username?.toLowerCase() === 'turcosivar' || currentUser?.role === 'ADMIN';
+    }
     if (currentUser?.role === 'ADMIN') {
       return true;
     }

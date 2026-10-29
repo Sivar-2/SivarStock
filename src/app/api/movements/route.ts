@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run } from '@/lib/db';
 import { getCurrentUser, canAccessModule } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
-import { DEFAULT_ISSUER_NAME, DEFAULT_ISSUER_ROLE, DEFAULT_LEGAL_NOTICE } from '@/app/api/actas/route';
+import { DEFAULT_ISSUER_NAME, DEFAULT_ISSUER_ROLE, DEFAULT_LEGAL_NOTICE } from '@/lib/actas-constants';
 
 export async function GET(req: NextRequest) {
   try {
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
     }
-    if (!canAccessModule(user, 'MOVIMIENTOS', 'view')) {
+    if (!canAccessModule(user, 'MOVIMIENTOS', 'READ')) {
       return NextResponse.json(
         { error: 'Acceso denegado al módulo de Entradas y Movimientos.' },
         { status: 403 }
@@ -171,7 +171,7 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
     }
-    if (!canAccessModule(user, 'MOVIMIENTOS', 'create')) {
+    if (!canAccessModule(user, 'MOVIMIENTOS', 'WRITE')) {
       return NextResponse.json(
         { error: 'Acceso denegado para registrar movimientos.' },
         { status: 403 }

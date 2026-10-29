@@ -2,13 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
-
-export const DEFAULT_LEGAL_NOTICE =
-  'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.';
-
-export const DEFAULT_ISSUER_NAME = 'Alexander Turcios Melendez';
-export const DEFAULT_ISSUER_ROLE =
-  'Especialista de Tecnología, Sistemas e Innovación — Departamento de Tecnología e Innovación (IT)';
+import { DEFAULT_LEGAL_NOTICE, DEFAULT_ISSUER_NAME, DEFAULT_ISSUER_ROLE } from '@/lib/actas-constants';
 
 async function getIssuerConfig() {
   const rows = await query<{ key: string; value: string }>(
@@ -57,12 +51,13 @@ export async function GET(req: NextRequest) {
       let parsedItems = [];
       let parsedReplaced = null;
       try {
-        parsedItems = JSON.parse(acta.items_json || '[]');
+        parsedItems = JSON.parse(acta.items_json || acta.devices_snapshot_json || '[]');
       } catch {
         parsedItems = [];
       }
       try {
-        parsedReplaced = acta.replaced_item_json ? JSON.parse(acta.replaced_item_json) : null;
+        const repJson = acta.replaced_item_json || acta.replaced_device_json;
+        parsedReplaced = repJson ? JSON.parse(repJson) : null;
       } catch {
         parsedReplaced = null;
       }
@@ -70,6 +65,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         acta: {
           ...acta,
+          delivered_by_name: acta.delivered_by_name || acta.issuer_name || issuerConfig.issuerName,
+          delivered_by_role: acta.delivered_by_role || acta.issuer_role || issuerConfig.issuerRole,
+          delivered_by_signature: acta.delivered_by_signature || acta.issuer_signature_data || '',
+          return_condition: acta.return_condition || acta.returned_condition || '',
+          returned_condition: acta.returned_condition || acta.return_condition || '',
+          internal_admin_notes: acta.internal_admin_notes || acta.internal_rental_notes_json || '',
+          internal_rental_notes_json: acta.internal_rental_notes_json || acta.internal_admin_notes || '',
           items: parsedItems,
           replacedItem: parsedReplaced,
         },
@@ -98,17 +100,25 @@ export async function GET(req: NextRequest) {
       let items = [];
       let replacedItem = null;
       try {
-        items = JSON.parse(r.items_json || '[]');
+        items = JSON.parse(r.items_json || r.devices_snapshot_json || '[]');
       } catch {
         items = [];
       }
       try {
-        replacedItem = r.replaced_item_json ? JSON.parse(r.replaced_item_json) : null;
+        const rep = r.replaced_item_json || r.replaced_device_json;
+        replacedItem = rep ? JSON.parse(rep) : null;
       } catch {
         replacedItem = null;
       }
       return {
         ...r,
+        delivered_by_name: r.delivered_by_name || r.issuer_name || issuerConfig.issuerName,
+        delivered_by_role: r.delivered_by_role || r.issuer_role || issuerConfig.issuerRole,
+        delivered_by_signature: r.delivered_by_signature || r.issuer_signature_data || '',
+        return_condition: r.return_condition || r.returned_condition || '',
+        returned_condition: r.returned_condition || r.return_condition || '',
+        internal_admin_notes: r.internal_admin_notes || r.internal_rental_notes_json || '',
+        internal_rental_notes_json: r.internal_rental_notes_json || r.internal_admin_notes || '',
         items,
         replacedItem,
       };
@@ -250,10 +260,12 @@ export async function POST(req: NextRequest) {
         id, acta_code, acta_type, employee_id, employee_code, employee_name,
         employee_dpi, employee_email, employee_phone, department_name, supervisor_name,
         delivered_by_name, delivered_by_role, delivered_by_signature,
-        items_json, replaced_item_json, delivery_date, status,
+        issuer_name, issuer_role, issuer_signature_data,
+        items_json, replaced_item_json, devices_snapshot_json, replaced_device_json,
+        delivery_date, status,
         employee_signature_data, signed_at, public_token, legal_notice, notes,
-        refused_to_sign, returned_condition, internal_admin_notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        refused_to_sign, return_condition, returned_condition, internal_rental_notes_json, internal_admin_notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         actaId,
         actaCode,
@@ -269,6 +281,11 @@ export async function POST(req: NextRequest) {
         issuerConfig.issuerName,
         issuerConfig.issuerRole,
         issuerConfig.issuerSignature || null,
+        issuerConfig.issuerName,
+        issuerConfig.issuerRole,
+        issuerConfig.issuerSignature || null,
+        JSON.stringify(items),
+        replacedItem ? JSON.stringify(replacedItem) : null,
         JSON.stringify(items),
         replacedItem ? JSON.stringify(replacedItem) : null,
         nowIso,
@@ -280,6 +297,8 @@ export async function POST(req: NextRequest) {
         notes || null,
         refusedToSign ? 1 : 0,
         returnedCondition || null,
+        returnedCondition || null,
+        internalAdminNotes || null,
         internalAdminNotes || null,
       ]
     );

@@ -39,7 +39,7 @@ export default function CelularesPage() {
 
   // Modal Crear / Editar Celular y Línea
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingDeviceId, setEditingDeviceId] =State<string | null>(null);
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     assignmentMode: 'EQUIPO_Y_LINEA',
     brand: '',

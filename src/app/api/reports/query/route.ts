@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
         FROM cost_records
       `),
       queryOne<any>(`SELECT COUNT(*) as count FROM inventory_movements`),
-      queryOne<any>(`SELECT COUNT(*) as count FROM actas WHERE status = 'PENDIENTE'`),
+      queryOne<any>(`SELECT COUNT(*) as count FROM delivery_actas WHERE status = 'PENDIENTE_FIRMA'`),
     ]);
 
     const payload = {

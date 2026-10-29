@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { query, queryOne, run } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { logAudit } from '@/lib/audit';
-import { DEFAULT_ISSUER_NAME, DEFAULT_ISSUER_ROLE, DEFAULT_LEGAL_NOTICE } from '@/app/api/actas/route';
+import { DEFAULT_ISSUER_NAME, DEFAULT_ISSUER_ROLE, DEFAULT_LEGAL_NOTICE } from '@/lib/actas-constants';
 
 const DEFAULT_CONTRACT_TYPES: Record<string, string> = {
   LICENCIA_SAAS: 'Licencia / Software SaaS',

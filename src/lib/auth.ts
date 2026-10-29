@@ -159,10 +159,16 @@ export async function getCurrentUser(): Promise<UserSession | null> {
 export function canAccessModule(
   user: UserSession | null,
   moduleName: string,
-  mode: 'READ' | 'WRITE' | 'DELETE' = 'READ'
+  mode: 'READ' | 'WRITE' | 'DELETE' | 'view' | 'create' | 'edit' | 'delete' | string = 'READ'
 ): boolean {
   if (!user) return false;
   if (user.role === 'ADMIN') return true;
+
+  const rawMode = String(mode || 'READ').toLowerCase();
+  const normalizedMode =
+    rawMode === 'view' || rawMode === 'read' ? 'READ' :
+    rawMode === 'delete' ? 'DELETE' :
+    'WRITE';
 
   const mod = moduleName.toUpperCase().trim();
 
@@ -176,7 +182,7 @@ export function canAccessModule(
     return false;
   }
 
-  if (mode === 'READ') {
+  if (normalizedMode === 'READ') {
     return true;
   }
 
@@ -184,7 +190,7 @@ export function canAccessModule(
     return false;
   }
 
-  if (mode === 'DELETE') {
+  if (normalizedMode === 'DELETE') {
     if (mod === 'USUARIOS' || mod === 'AUDITORIA') {
       return false;
     }

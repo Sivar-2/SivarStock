@@ -7,17 +7,76 @@ import Header from './Header';
 import FloatingDock from './FloatingDock';
 import QrScannerModal from './QrScannerModal';
 import OfflineSyncBanner from './OfflineSyncBanner';
+import { ShieldAlert, ArrowRight } from 'lucide-react';
 
 interface AppLayoutProps {
   children: React.ReactNode;
 }
 
+const ROUTE_TO_TAB: Record<string, string> = {
+  '/': 'DASHBOARD',
+  '/inventario': 'INVENTARIO',
+  '/celulares': 'CELULARES',
+  '/productos': 'PRODUCTOS',
+  '/movimientos': 'MOVIMIENTOS',
+  '/asignaciones': 'ASIGNACIONES',
+  '/mantenimiento': 'MANTENIMIENTO',
+  '/servicios-digitales': 'SERVICIOS',
+  '/costos': 'COSTOS',
+  '/reportes': 'REPORTES',
+  '/departamentos': 'DEPARTAMENTOS',
+  '/usuarios': 'USUARIOS',
+  '/auditoria': 'AUDITORIA',
+  '/configuracion': 'CONFIGURACION',
+};
+
+const TAB_TO_ROUTE: Record<string, string> = {
+  DASHBOARD: '/',
+  INVENTARIO: '/inventario',
+  CELULARES: '/celulares',
+  PRODUCTOS: '/productos',
+  MOVIMIENTOS: '/movimientos',
+  ASIGNACIONES: '/asignaciones',
+  MANTENIMIENTO: '/mantenimiento',
+  SERVICIOS: '/servicios-digitales',
+  COSTOS: '/costos',
+  REPORTES: '/reportes',
+  DEPARTAMENTOS: '/departamentos',
+  USUARIOS: '/usuarios',
+  AUDITORIA: '/auditoria',
+  CONFIGURACION: '/configuracion',
+};
+
+function getFirstAllowedRoute(user: any): string {
+  if (!user || user.role === 'ADMIN') return '/';
+  const tabs: string[] = Array.isArray(user.allowedTabs) ? user.allowedTabs : [];
+  if (tabs.includes('DASHBOARD')) return '/';
+  for (const t of tabs) {
+    if (TAB_TO_ROUTE[t]) return TAB_TO_ROUTE[t];
+  }
+  return '/login';
+}
+
+function isRouteAllowedForUser(pathname: string, user: any): boolean {
+  if (!user) return false;
+  if (user.role === 'ADMIN') return true;
+
+  const matchedBase = Object.keys(ROUTE_TO_TAB).find((r) =>
+    r === '/' ? pathname === '/' : pathname === r || pathname.startsWith(`${r}/`)
+  );
+  if (!matchedBase) return true;
+
+  const requiredTab = ROUTE_TO_TAB[matchedBase];
+  const allowedTabs: string[] = Array.isArray(user.allowedTabs) ? user.allowedTabs : [];
+  return allowedTabs.includes(requiredTab);
+}
+
 export default function AppLayout({ children }: AppLayoutProps) {
-  const pathname = usePathname();
+  const pathname = usePathname() || '/';
   const router = useRouter();
 
   // Si estamos en login o en el enlace público de firma de acta (/acta/...), no forzamos el layout administrativo
-  const isPublicPage = pathname === '/login' || pathname?.startsWith('/acta/');
+  const isPublicPage = pathname === '/login' || pathname.startsWith('/acta/');
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -32,19 +91,39 @@ export default function AppLayout({ children }: AppLayoutProps) {
       return;
     }
 
-    // Verificar sesión activa
-    fetch('/api/auth/me')
+    // Hidratación rápida desde sessionStorage si acaba de iniciar sesión
+    try {
+      const cached = sessionStorage.getItem('sivarstock_logged_user');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.id) {
+          setCurrentUser(parsed);
+          setLoadingAuth(false);
+        }
+      }
+    } catch {
+      // Ignorar errores de sessionStorage
+    }
+
+    // Verificar sesión activa contra el servidor sin caché
+    fetch('/api/auth/me', { cache: 'no-store', credentials: 'include' })
       .then((res) => res.json())
       .then((data) => {
         if (!data.authenticated || !data.user) {
-          router.push('/login');
+          try {
+            sessionStorage.removeItem('sivarstock_logged_user');
+          } catch {}
+          setCurrentUser(null);
+          router.replace('/login');
         } else {
           setCurrentUser(data.user);
+          try {
+            sessionStorage.setItem('sivarstock_logged_user', JSON.stringify(data.user));
+          } catch {}
         }
       })
       .catch((err) => {
         console.error('Error verificando sesión:', err);
-        router.push('/login');
       })
       .finally(() => {
         setLoadingAuth(false);
@@ -62,7 +141,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
           });
         }
       })
-      .catch(console.error);
+      .catch(() => {});
 
     // Modo nocturno inicial desde localStorage
     const savedTheme = localStorage.getItem('sivarstock_theme');
@@ -71,13 +150,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
     } else {
       document.documentElement.classList.remove('dark');
     }
-  }, [isPublicPage, router]);
+  }, [isPublicPage, pathname, router]);
 
   if (isPublicPage) {
     return <>{children}</>;
   }
 
-  if (loadingAuth) {
+  if (loadingAuth && !currentUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-900 text-slate-200">
         <div className="flex flex-col items-center gap-3">
@@ -87,6 +166,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
       </div>
     );
   }
+
+  if (!currentUser) {
+    return null;
+  }
+
+  const allowedOnCurrentRoute = isRouteAllowedForUser(pathname, currentUser);
+  const firstAllowedHref = getFirstAllowedRoute(currentUser);
 
   const handleToggleSidebar = () => {
     if (window.innerWidth < 1024) {
@@ -98,7 +184,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   return (
     <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
-      {/* Barra lateral */}
+      {/* Barra lateral (solo muestra las pestañas permitidas a este usuario) */}
       {!sidebarCollapsed && (
         <Sidebar
           isOpen={mobileSidebarOpen}
@@ -115,14 +201,37 @@ export default function AppLayout({ children }: AppLayoutProps) {
           onToggleSidebar={handleToggleSidebar}
           onOpenScanner={() => setScannerOpen(true)}
           sidebarCollapsed={sidebarCollapsed}
-          currentUser={currentUser || undefined}
+          currentUser={currentUser}
         />
 
         {/* Banner de Cola Offline y Auto-Confirmación al entrar al Wi-Fi de la empresa */}
         <OfflineSyncBanner />
 
         <main className={`flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 ${sidebarCollapsed ? 'pb-24' : ''}`}>
-          {children}
+          {allowedOnCurrentRoute ? (
+            children
+          ) : (
+            <div className="mx-auto max-w-lg mt-12 rounded-2xl border border-amber-200 bg-white p-8 text-center shadow-lg space-y-4">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                <ShieldAlert className="h-8 w-8" />
+              </div>
+              <h2 className="text-lg font-black text-slate-900">
+                Módulo No Incluido en tus Permisos
+              </h2>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Tu usuario (<strong>@{currentUser.username}</strong>) solo tiene autorización para acceder a las secciones que el administrador te asignó.
+              </p>
+              {firstAllowedHref !== '/login' && (
+                <button
+                  onClick={() => router.replace(firstAllowedHref)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-military-800 px-5 py-2.5 text-xs font-bold text-white shadow hover:bg-military-900 transition"
+                >
+                  <span>Ir a mi sección autorizada</span>
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          )}
         </main>
       </div>
 
@@ -131,6 +240,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
         <FloatingDock
           onOpenScanner={() => setScannerOpen(true)}
           onExpandSidebar={() => setSidebarCollapsed(false)}
+          currentUser={currentUser}
         />
       )}
 

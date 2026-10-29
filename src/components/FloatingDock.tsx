@@ -23,33 +23,37 @@ import {
 interface FloatingDockProps {
   onOpenScanner: () => void;
   onExpandSidebar: () => void;
-  customShortcuts?: { name: string; href: string }[];
+  currentUser?: {
+    role?: string;
+    allowedTabs?: string[];
+  } | null;
 }
 
-const SHORTCUT_MAP: Record<string, { name: string; icon: any }> = {
-  '/': { name: 'Inicio', icon: LayoutDashboard },
-  '/inventario': { name: 'Inventario', icon: Boxes },
-  '/celulares': { name: 'Celulares', icon: Smartphone },
-  '/productos': { name: 'Productos', icon: Layers },
-  '/movimientos': { name: 'Movimientos', icon: ArrowLeftRight },
-  '/asignaciones': { name: 'Asignaciones', icon: UserCheck },
-  '/mantenimiento': { name: 'Averías', icon: Wrench },
-  '/servicios-digitales': { name: 'Servicios', icon: Globe },
-  '/costos': { name: 'Costos', icon: DollarSign },
-  '/reportes': { name: 'Reportes', icon: FileBarChart2 },
-  '/departamentos': { name: 'Áreas', icon: Building2 },
-  '/configuracion': { name: 'Ajustes', icon: Settings },
+const SHORTCUT_MAP: Record<string, { name: string; icon: any; tabKey: string }> = {
+  '/': { name: 'Inicio', icon: LayoutDashboard, tabKey: 'DASHBOARD' },
+  '/inventario': { name: 'Inventario', icon: Boxes, tabKey: 'INVENTARIO' },
+  '/celulares': { name: 'Celulares', icon: Smartphone, tabKey: 'CELULARES' },
+  '/productos': { name: 'Productos', icon: Layers, tabKey: 'PRODUCTOS' },
+  '/movimientos': { name: 'Movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS' },
+  '/asignaciones': { name: 'Asignaciones', icon: UserCheck, tabKey: 'ASIGNACIONES' },
+  '/mantenimiento': { name: 'Averías', icon: Wrench, tabKey: 'MANTENIMIENTO' },
+  '/servicios-digitales': { name: 'Servicios', icon: Globe, tabKey: 'SERVICIOS' },
+  '/costos': { name: 'Costos', icon: DollarSign, tabKey: 'COSTOS' },
+  '/reportes': { name: 'Reportes', icon: FileBarChart2, tabKey: 'REPORTES' },
+  '/departamentos': { name: 'Áreas', icon: Building2, tabKey: 'DEPARTAMENTOS' },
+  '/configuracion': { name: 'Ajustes', icon: Settings, tabKey: 'CONFIGURACION' },
 };
 
 export default function FloatingDock({
   onOpenScanner,
   onExpandSidebar,
+  currentUser,
 }: FloatingDockProps) {
   const pathname = usePathname();
   const [shortcutHrefs, setShortcutHrefs] = useState<string[]>([
     '/',
     '/inventario',
-    '/costos',
+    '/asignaciones',
     '/reportes',
   ]);
 
@@ -60,6 +64,14 @@ export default function FloatingDock({
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length === 4) {
           setShortcutHrefs(parsed);
+        } else if (parsed && typeof parsed === 'object') {
+          const list = [
+            parsed.left1?.href,
+            parsed.left2?.href,
+            parsed.right1?.href,
+            parsed.right2?.href,
+          ].filter(Boolean);
+          if (list.length === 4) setShortcutHrefs(list);
         }
       }
     } catch {
@@ -67,10 +79,15 @@ export default function FloatingDock({
     }
   }, [pathname]);
 
-  const resolvedShortcuts = shortcutHrefs.map((href) => {
-    const info = SHORTCUT_MAP[href] || { name: 'Módulo', icon: Boxes };
-    return { href, name: info.name, icon: info.icon };
-  });
+  const allowedTabs = Array.isArray(currentUser?.allowedTabs) ? currentUser!.allowedTabs : [];
+  const isAdmin = currentUser?.role === 'ADMIN';
+
+  const resolvedShortcuts = shortcutHrefs
+    .map((href) => {
+      const info = SHORTCUT_MAP[href] || { name: 'Módulo', icon: Boxes, tabKey: 'INVENTARIO' };
+      return { href, name: info.name, icon: info.icon, tabKey: info.tabKey };
+    })
+    .filter((item) => isAdmin || allowedTabs.includes(item.tabKey));
 
   const leftShortcuts = resolvedShortcuts.slice(0, 2);
   const rightShortcuts = resolvedShortcuts.slice(2, 4);
@@ -78,7 +95,6 @@ export default function FloatingDock({
   return (
     <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 transform transition-all duration-300 animate-in fade-in slide-in-from-bottom-5">
       <div className="flex items-center gap-1.5 sm:gap-3 rounded-full border border-slate-700/80 bg-slate-900/90 px-3 sm:px-4 py-2 shadow-2xl backdrop-blur-xl ring-1 ring-white/10">
-        {/* Botón para expandir la barra lateral completa */}
         <button
           onClick={onExpandSidebar}
           className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-800 hover:text-white"
@@ -90,7 +106,6 @@ export default function FloatingDock({
 
         <div className="h-6 w-px bg-slate-800" />
 
-        {/* Atajos de la Izquierda */}
         {leftShortcuts.map((item) => {
           const Icon = item.icon;
           const isActive = pathname === item.href;
@@ -111,7 +126,6 @@ export default function FloatingDock({
           );
         })}
 
-        {/* Botón Central: Escáner QR / Barra Destacado (Estilo iPhone) */}
         <div className="relative -my-3 px-1">
           <button
             onClick={onOpenScanner}
@@ -127,7 +141,6 @@ export default function FloatingDock({
           </button>
         </div>
 
-        {/* Atajos de la Derecha */}
         {rightShortcuts.map((item) => {
           const Icon = item.icon;
           const isActive = pathname === item.href;

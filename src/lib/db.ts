@@ -1,14 +1,16 @@
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import fs from 'fs';
 import path from 'path';
+import bcrypt from 'bcryptjs';
 import { Pool, PoolClient } from 'pg';
 import { AsyncLocalStorage } from 'async_hooks';
-import { seedInitialData } from './seed-data';
+import { seedInitialData, ALL_TABS_JSON } from './seed-data';
 import { getSqlWasmBinary } from './sql-wasm-binary';
 import { SCHEMA_SQL } from './schema-sql';
 
 let sqlJsInstance: SqlJsStatic | null = null;
 let sqliteDbInstance: Database | null = null;
+let initDbPromise: Promise<Database> | null = null;
 let pgPoolInstance: Pool | null = null;
 let pgMigrated = false;
 const txStorage = new AsyncLocalStorage<PoolClient>();
@@ -45,22 +47,7 @@ function getPgPool(): Pool {
       POSTGRES_URL.includes('127.0.0.1') ||
       POSTGRES_URL.includes('192.168.') ||
       POSTGRES_URL.includes('10.') ||
-      POSTGRES_URL.includes('172.16.') ||
-      POSTGRES_URL.includes('172.17.') ||
-      POSTGRES_URL.includes('172.18.') ||
-      POSTGRES_URL.includes('172.19.') ||
-      POSTGRES_URL.includes('172.20.') ||
-      POSTGRES_URL.includes('172.21.') ||
-      POSTGRES_URL.includes('172.22.') ||
-      POSTGRES_URL.includes('172.23.') ||
-      POSTGRES_URL.includes('172.24.') ||
-      POSTGRES_URL.includes('172.25.') ||
-      POSTGRES_URL.includes('172.26.') ||
-      POSTGRES_URL.includes('172.27.') ||
-      POSTGRES_URL.includes('172.28.') ||
-      POSTGRES_URL.includes('172.29.') ||
-      POSTGRES_URL.includes('172.30.') ||
-      POSTGRES_URL.includes('172.31.') ||
+      POSTGRES_URL.includes('172.') ||
       POSTGRES_URL.includes('sslmode=disable');
 
     pgPoolInstance = new Pool({
@@ -130,28 +117,27 @@ async function ensurePgAutoMigrations(executor: Pool | PoolClient): Promise<void
       id TEXT PRIMARY KEY,
       acta_code TEXT UNIQUE NOT NULL,
       acta_type TEXT NOT NULL DEFAULT 'ENTREGA_INICIAL',
-      employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+      employee_id TEXT,
       employee_code TEXT,
       employee_name TEXT NOT NULL,
       employee_dpi TEXT,
-      employee_email TEXT,
-      employee_phone TEXT,
       department_name TEXT,
       supervisor_name TEXT,
-      delivered_by_name TEXT NOT NULL DEFAULT 'Alexander Turcios Melendez',
-      delivered_by_role TEXT DEFAULT 'Jefe de IT / Administración de Inventario',
-      delivered_by_signature TEXT,
-      items_json TEXT NOT NULL DEFAULT '[]',
-      replaced_item_json TEXT,
+      issuer_name TEXT NOT NULL DEFAULT 'Alexander Turcios Melendez',
+      issuer_role TEXT DEFAULT 'Jefe de IT / Administración de Inventario',
+      issuer_signature_data TEXT,
+      receive_condition TEXT NOT NULL DEFAULT 'NUEVO',
       delivery_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      devices_snapshot_json TEXT NOT NULL DEFAULT '[]',
+      replaced_device_json TEXT,
+      notes TEXT,
       status TEXT NOT NULL DEFAULT 'PENDIENTE_FIRMA',
       employee_signature_data TEXT,
       signed_at TEXT,
       signed_ip TEXT,
-      public_token TEXT NOT NULL,
-      legal_notice TEXT NOT NULL DEFAULT 'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado en su correo electrónico. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.',
-      notes TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
+      legal_notice TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
   ];
   for (const sql of pgMigrations) {
@@ -160,6 +146,28 @@ async function ensurePgAutoMigrations(executor: Pool | PoolClient): Promise<void
     } catch {
       // Ignorar si la tabla o columna ya existe
     }
+  }
+
+  // Asegurar usuario administrador principal turcosivar / 12345679 en PostgreSQL
+  try {
+    const hash = bcrypt.hashSync('12345679', 10);
+    await executor.query(
+      `INSERT INTO users (
+        id, username, full_name, email, password_hash, role,
+        department_id, initials, allowed_tabs_json,
+        only_own_department, can_view_financials, can_export, can_manage_users, can_edit, is_active
+      ) VALUES ($1, $2, $3, $4, $5, 'ADMIN', 'dept-it', 'ATM', $6, 0, 1, 1, 1, 1, 1)
+      ON CONFLICT (username) DO UPDATE SET
+        password_hash = EXCLUDED.password_hash,
+        role = 'ADMIN',
+        allowed_tabs_json = EXCLUDED.allowed_tabs_json,
+        can_manage_users = 1,
+        can_edit = 1,
+        is_active = 1`,
+      ['usr-turcosivar', 'turcosivar', 'Alexander Turcios Melendez', 'turcosivar@sivarstock.local', hash, ALL_TABS_JSON]
+    );
+  } catch {
+    // Ignorar si hay conflicto de email
   }
 }
 
@@ -179,16 +187,13 @@ function getPgExecutor(): Pool | PoolClient {
  */
 function runSqliteAutoMigrations(db: Database): void {
   const migrations = [
-    // DPI y Cargo en empleados
     `ALTER TABLE employees ADD COLUMN dpi TEXT`,
     `ALTER TABLE employees ADD COLUMN job_title TEXT`,
-    // Identificadores técnicos en activos físicos (inventory_items)
     `ALTER TABLE inventory_items ADD COLUMN mac_address TEXT`,
     `ALTER TABLE inventory_items ADD COLUMN imei TEXT`,
     `ALTER TABLE inventory_items ADD COLUMN ip_address TEXT`,
     `ALTER TABLE inventory_items ADD COLUMN hostname TEXT`,
     `ALTER TABLE inventory_items ADD COLUMN specifications TEXT`,
-    // Control de contratos, líneas, serie y MAC en dispositivos móviles (mobile_devices)
     `ALTER TABLE mobile_devices ADD COLUMN serial_number TEXT`,
     `ALTER TABLE mobile_devices ADD COLUMN mac_address TEXT`,
     `ALTER TABLE mobile_devices ADD COLUMN carrier TEXT DEFAULT 'Tigo'`,
@@ -199,14 +204,12 @@ function runSqliteAutoMigrations(db: Database): void {
     `ALTER TABLE mobile_devices ADD COLUMN contract_start_date TEXT`,
     `ALTER TABLE mobile_devices ADD COLUMN contract_end_date TEXT`,
     `ALTER TABLE mobile_devices ADD COLUMN renewal_alert_days INTEGER DEFAULT 30`,
-    // Control de contratos con proveedores en servicios digitales (digital_services)
     `ALTER TABLE digital_services ADD COLUMN contract_number TEXT`,
     `ALTER TABLE digital_services ADD COLUMN contract_type TEXT DEFAULT 'LICENCIA_SAAS'`,
     `ALTER TABLE digital_services ADD COLUMN contact_name TEXT`,
     `ALTER TABLE digital_services ADD COLUMN contact_phone TEXT`,
     `ALTER TABLE digital_services ADD COLUMN contact_email TEXT`,
     `ALTER TABLE digital_services ADD COLUMN sla_terms TEXT`,
-    // Tabla de Recuentos y Conciliación Física de Inventario
     `CREATE TABLE IF NOT EXISTS inventory_counts (
       id TEXT PRIMARY KEY,
       count_code TEXT UNIQUE NOT NULL,
@@ -223,33 +226,31 @@ function runSqliteAutoMigrations(db: Database): void {
       status TEXT DEFAULT 'COMPLETADO',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )`,
-    // Tabla de Actas Digitales de Entrega y Firma Electrónica (WhatsApp / Celular / Impresión)
     `CREATE TABLE IF NOT EXISTS delivery_actas (
       id TEXT PRIMARY KEY,
       acta_code TEXT UNIQUE NOT NULL,
       acta_type TEXT NOT NULL DEFAULT 'ENTREGA_INICIAL',
-      employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+      employee_id TEXT,
       employee_code TEXT,
       employee_name TEXT NOT NULL,
       employee_dpi TEXT,
-      employee_email TEXT,
-      employee_phone TEXT,
       department_name TEXT,
       supervisor_name TEXT,
-      delivered_by_name TEXT NOT NULL DEFAULT 'Alexander Turcios Melendez',
-      delivered_by_role TEXT DEFAULT 'Jefe de IT / Administración de Inventario',
-      delivered_by_signature TEXT,
-      items_json TEXT NOT NULL DEFAULT '[]',
-      replaced_item_json TEXT,
+      issuer_name TEXT NOT NULL DEFAULT 'Alexander Turcios Melendez',
+      issuer_role TEXT DEFAULT 'Jefe de IT / Administración de Inventario',
+      issuer_signature_data TEXT,
+      receive_condition TEXT NOT NULL DEFAULT 'NUEVO',
       delivery_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      devices_snapshot_json TEXT NOT NULL DEFAULT '[]',
+      replaced_device_json TEXT,
+      notes TEXT,
       status TEXT NOT NULL DEFAULT 'PENDIENTE_FIRMA',
       employee_signature_data TEXT,
       signed_at TEXT,
       signed_ip TEXT,
-      public_token TEXT NOT NULL,
-      legal_notice TEXT NOT NULL DEFAULT 'Al firmar este documento, acepto los términos de entrega, la nota de confidencialidad y consiento el uso de la firma electrónica. Automáticamente recibirá una copia de este documento firmado en su correo electrónico. Si requiere una copia física, este documento digital puede ser impreso en cualquier momento.',
-      notes TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      legal_notice TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )`,
   ];
 
@@ -262,85 +263,148 @@ function runSqliteAutoMigrations(db: Database): void {
       // La columna o tabla ya existe; continuar silenciosamente
     }
   }
+
+  // Asegurar siempre que el usuario principal turcosivar con contraseña 12345679 exista y esté activo
+  try {
+    const checkStmt = db.prepare(`SELECT id FROM users WHERE LOWER(username) = 'turcosivar'`);
+    const exists = checkStmt.step();
+    checkStmt.free();
+
+    const passHash = bcrypt.hashSync('12345679', 10);
+    if (!exists) {
+      db.run(
+        `INSERT INTO users (
+          id, username, full_name, email, password_hash, role,
+          department_id, initials, allowed_tabs_json,
+          only_own_department, can_view_financials, can_export, can_manage_users, can_edit, is_active
+        ) VALUES (?, ?, ?, ?, ?, 'ADMIN', 'dept-it', 'ATM', ?, 0, 1, 1, 1, 1, 1)`,
+        ['usr-turcosivar', 'turcosivar', 'Alexander Turcios Melendez', 'turcosivar@sivarstock.local', passHash, ALL_TABS_JSON]
+      );
+      modified = true;
+    } else {
+      db.run(
+        `UPDATE users SET
+          password_hash = ?,
+          full_name = 'Alexander Turcios Melendez',
+          role = 'ADMIN',
+          allowed_tabs_json = ?,
+          can_view_financials = 1,
+          can_export = 1,
+          can_manage_users = 1,
+          can_edit = 1,
+          is_active = 1
+         WHERE LOWER(username) = 'turcosivar'`,
+        [passHash, ALL_TABS_JSON]
+      );
+      modified = true;
+    }
+  } catch (e) {
+    console.warn('Aviso sincronizando usuario turcosivar:', e);
+  }
+
   if (modified) {
     saveDb();
   }
 }
 
 /**
- * Inicializa la base de datos SQLite (sql.js WASM) ÚNICAMENTE cuando no hay PostgreSQL configurado
+ * Inicializa la base de datos SQLite (sql.js WASM) con bloqueo de concurrencia seguro
  */
 export async function initDb(): Promise<Database> {
   if (sqliteDbInstance) {
     return sqliteDbInstance;
   }
 
-  if (!sqlJsInstance) {
-    try {
-      const wasmBinary = getSqlWasmBinary();
-      sqlJsInstance = await initSqlJs({
-        wasmBinary,
-      });
-    } catch (wasmErr) {
-      console.warn('[WASM Warning] Fallback en carga de wasm:', wasmErr);
-      sqlJsInstance = await initSqlJs();
-    }
+  if (initDbPromise) {
+    return initDbPromise;
   }
 
-  const dir = path.dirname(DB_FILE_PATH);
-  try {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+  initDbPromise = (async () => {
+    if (!sqlJsInstance) {
+      try {
+        // Priorizar el archivo sql-wasm.wasm exacto instalado en node_modules para evitar desajustes de versión
+        const localWasmPath = path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+        if (fs.existsSync(localWasmPath)) {
+          const wasmBuf = fs.readFileSync(localWasmPath);
+          const wasmArrayBuffer = wasmBuf.buffer.slice(wasmBuf.byteOffset, wasmBuf.byteOffset + wasmBuf.byteLength);
+          sqlJsInstance = await initSqlJs({
+            wasmBinary: wasmArrayBuffer as ArrayBuffer,
+          });
+        } else {
+          const wasmBinary = getSqlWasmBinary();
+          sqlJsInstance = await initSqlJs({
+            wasmBinary,
+          });
+        }
+      } catch (wasmErr) {
+        console.warn('[WASM Warning] Fallback en carga de wasm:', wasmErr);
+        const wasmBinary = getSqlWasmBinary();
+        sqlJsInstance = await initSqlJs({ wasmBinary });
+      }
     }
-  } catch (e) {
-    console.warn('[DB FileSystem Warning] No se pudo crear directorio de base de datos:', e);
-  }
 
-  let needsSeed = false;
-
-  if (fs.existsSync(DB_FILE_PATH)) {
+    const dir = path.dirname(DB_FILE_PATH);
     try {
-      const fileBuffer = fs.readFileSync(DB_FILE_PATH);
-      sqliteDbInstance = new sqlJsInstance.Database(fileBuffer);
-    } catch {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    } catch (e) {
+      console.warn('[DB FileSystem Warning] No se pudo crear directorio de base de datos:', e);
+    }
+
+    let needsSeed = false;
+
+    if (fs.existsSync(DB_FILE_PATH)) {
+      try {
+        const fileBuffer = fs.readFileSync(DB_FILE_PATH);
+        sqliteDbInstance = new sqlJsInstance.Database(fileBuffer);
+      } catch {
+        sqliteDbInstance = new sqlJsInstance.Database();
+        needsSeed = true;
+      }
+    } else {
       sqliteDbInstance = new sqlJsInstance.Database();
       needsSeed = true;
     }
-  } else {
-    sqliteDbInstance = new sqlJsInstance.Database();
-    needsSeed = true;
-  }
 
-  // Verificar si las tablas existen en SQLite
-  try {
-    const testStmt = sqliteDbInstance.prepare("SELECT count(*) as cnt FROM sqlite_master WHERE type='table' AND name='users'");
-    if (testStmt.step()) {
-      const row = testStmt.getAsObject() as { cnt: number };
-      if (!row || row.cnt === 0) {
-        needsSeed = true;
+    // Verificar si las tablas existen en SQLite
+    try {
+      const testStmt = sqliteDbInstance.prepare("SELECT count(*) as cnt FROM sqlite_master WHERE type='table' AND name='users'");
+      if (testStmt.step()) {
+        const row = testStmt.getAsObject() as { cnt: number };
+        if (!row || row.cnt === 0) {
+          needsSeed = true;
+        }
       }
+      testStmt.free();
+    } catch {
+      needsSeed = true;
     }
-    testStmt.free();
-  } catch {
-    needsSeed = true;
+
+    if (needsSeed) {
+      sqliteDbInstance.run(SCHEMA_SQL);
+
+      await seedInitialData(async (sql, params = []) => {
+        if (sqliteDbInstance) {
+          sqliteDbInstance.run(sql, params);
+        }
+      });
+
+      saveDb();
+    }
+
+    // Aplicar migraciones aditivas y garantizar cuenta turcosivar / 12345679
+    runSqliteAutoMigrations(sqliteDbInstance);
+
+    return sqliteDbInstance;
+  })();
+
+  try {
+    return await initDbPromise;
+  } catch (err) {
+    initDbPromise = null;
+    throw err;
   }
-
-  if (needsSeed) {
-    sqliteDbInstance.run(SCHEMA_SQL);
-
-    await seedInitialData(async (sql, params = []) => {
-      if (sqliteDbInstance) {
-        sqliteDbInstance.run(sql, params);
-      }
-    });
-
-    saveDb();
-  }
-
-  // Aplicar migraciones aditivas para garantizar que todas las columnas y tablas nuevas existan
-  runSqliteAutoMigrations(sqliteDbInstance);
-
-  return sqliteDbInstance;
 }
 
 /**

@@ -6,7 +6,7 @@ import { logAudit } from '@/lib/audit';
 export async function GET() {
   try {
     const user = await getCurrentUser();
-    if (!user || user.role !== 'ADMIN') {
+    if (!user || (user.role !== 'ADMIN' && !user.canManageUsers)) {
       return NextResponse.json({ error: 'Solo el administrador puede gestionar usuarios y permisos.' }, { status: 403 });
     }
 
@@ -34,7 +34,7 @@ export async function GET() {
       LEFT JOIN departments d ON u.department_id = d.id
       LEFT JOIN employees e ON u.employee_id = e.id
       ORDER BY 
-        CASE WHEN u.role = 'ADMIN' THEN 1 WHEN u.role = 'SUBADMIN' THEN 2 ELSE 3 END,
+        CASE WHEN LOWER(u.username) = 'turcosivar' THEN 0 WHEN u.role = 'ADMIN' THEN 1 WHEN u.role = 'SUBADMIN' THEN 2 ELSE 3 END,
         u.full_name ASC
     `);
 
@@ -66,7 +66,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const currentUser = await getCurrentUser();
-    if (!currentUser || currentUser.role !== 'ADMIN') {
+    if (!currentUser || (currentUser.role !== 'ADMIN' && !currentUser.canManageUsers)) {
       return NextResponse.json({ error: 'Solo el administrador puede crear usuarios.' }, { status: 403 });
     }
 
@@ -79,46 +79,60 @@ export async function POST(request: NextRequest) {
       role = 'AREA_MANAGER',
       department_id,
       employee_id,
-      allowedTabs = ['DASHBOARD', 'INVENTARIO', 'PRODUCTOS'],
+      allowedTabs = ['DASHBOARD', 'INVENTARIO'],
       only_own_department = false,
       can_view_financials = false,
       can_export = false,
       can_edit = true,
     } = body;
 
-    if (!username || !full_name || !email || !password) {
-      return NextResponse.json({ error: 'Usuario, nombre, correo y contraseña son obligatorios.' }, { status: 400 });
+    const cleanUsername = String(username || '').trim().toLowerCase();
+    const cleanFullName = String(full_name || '').trim();
+    const cleanEmail = email && String(email).trim()
+      ? String(email).trim().toLowerCase()
+      : `${cleanUsername}@sivarstock.local`;
+
+    if (!cleanUsername || !cleanFullName || !password) {
+      return NextResponse.json({ error: 'Usuario, nombre completo y contraseña son obligatorios.' }, { status: 400 });
     }
 
-    // Comprobar unicidad
-    const existing = await queryOne<any>('SELECT id FROM users WHERE username = ? OR email = ?', [username, email]);
+    // Comprobar unicidad de username y correo
+    const existing = await queryOne<any>(
+      'SELECT id, username, email FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?',
+      [cleanUsername, cleanEmail]
+    );
     if (existing) {
-      return NextResponse.json({ error: 'El nombre de usuario o correo electrónico ya está registrado.' }, { status: 400 });
+      return NextResponse.json(
+        { error: `El usuario "${cleanUsername}" o el correo "${cleanEmail}" ya está registrado.` },
+        { status: 400 }
+      );
     }
 
-    const initials = full_name
+    const initials = cleanFullName
       .split(' ')
       .filter(Boolean)
       .map((w: string) => w[0])
       .join('')
       .substring(0, 3)
-      .toUpperCase();
+      .toUpperCase() || 'USR';
 
     const passwordHash = await hashPassword(password);
     const id = `USR-${Date.now()}`;
-    const allowedTabsJson = JSON.stringify(allowedTabs);
+    const validTabs = Array.isArray(allowedTabs) && allowedTabs.length > 0 ? allowedTabs : ['INVENTARIO'];
+    const allowedTabsJson = JSON.stringify(validTabs);
+    const effectiveCanEdit = role === 'VIEWER' ? 0 : (can_edit ? 1 : 0);
 
     await run(
       `INSERT INTO users (
         id, username, full_name, email, password_hash, role,
         department_id, employee_id, initials, allowed_tabs_json,
-        only_own_department, can_view_financials, can_export, can_edit, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        only_own_department, can_view_financials, can_export, can_manage_users, can_edit, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         id,
-        username.trim().toLowerCase(),
-        full_name.trim(),
-        email.trim().toLowerCase(),
+        cleanUsername,
+        cleanFullName,
+        cleanEmail,
         passwordHash,
         role,
         department_id || null,
@@ -128,7 +142,8 @@ export async function POST(request: NextRequest) {
         only_own_department ? 1 : 0,
         can_view_financials ? 1 : 0,
         can_export ? 1 : 0,
-        can_edit ? 1 : 0,
+        role === 'ADMIN' ? 1 : 0,
+        effectiveCanEdit,
       ]
     );
 
@@ -139,12 +154,16 @@ export async function POST(request: NextRequest) {
       action: 'CREAR_USUARIO',
       module: 'USUARIOS',
       entityId: id,
-      entityName: `${username} (${full_name})`,
-      afterState: { username, role, department_id, allowedTabs, only_own_department },
-      reason: `Creación de cuenta de usuario con rol ${role}`,
+      entityName: `${cleanUsername} (${cleanFullName})`,
+      afterState: { username: cleanUsername, role, department_id, allowedTabs: validTabs, only_own_department },
+      reason: `Creación de cuenta de usuario @${cleanUsername} con rol ${role} y ${validTabs.length} pestañas autorizadas`,
     });
 
-    return NextResponse.json({ success: true, id, message: 'Usuario creado exitosamente con permisos personalizados.' });
+    return NextResponse.json({
+      success: true,
+      id,
+      message: `Usuario @${cleanUsername} creado exitosamente. Solo podrá ver las ${validTabs.length} pestaña(s) asignadas.`,
+    });
   } catch (error: any) {
     console.error('Error creating user:', error);
     return NextResponse.json({ error: error.message || 'Error al crear usuario.' }, { status: 500 });
@@ -154,13 +173,14 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const currentUser = await getCurrentUser();
-    if (!currentUser || currentUser.role !== 'ADMIN') {
+    if (!currentUser || (currentUser.role !== 'ADMIN' && !currentUser.canManageUsers)) {
       return NextResponse.json({ error: 'Solo el administrador puede modificar permisos de usuarios.' }, { status: 403 });
     }
 
     const body = await request.json();
     const {
       id,
+      username,
       full_name,
       email,
       password,
@@ -183,27 +203,33 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 });
     }
 
-    // Protección para el administrador principal
-    if (user.email === 'alexander7tm@gmail.com' && (is_active === false || (role && role !== 'ADMIN'))) {
-      return NextResponse.json({ error: 'El administrador principal alexander7tm@gmail.com no puede ser desactivado ni degradado.' }, { status: 400 });
+    const isMainSuperAdmin = String(user.username).toLowerCase() === 'turcosivar';
+    if (isMainSuperAdmin && (is_active === false || (role && role !== 'ADMIN'))) {
+      return NextResponse.json({ error: 'El usuario administrador principal @turcosivar no puede ser desactivado ni degradado.' }, { status: 400 });
     }
+
+    const nextUsername = username ? String(username).trim().toLowerCase() : user.username;
+    const nextEmail = email && String(email).trim() ? String(email).trim().toLowerCase() : user.email;
+    const nextRole = role || user.role;
+    const nextCanEdit = nextRole === 'VIEWER' ? 0 : (can_edit !== undefined ? (can_edit ? 1 : 0) : user.can_edit);
 
     let passwordClause = '';
     const params: any[] = [
-      full_name || user.full_name,
-      email || user.email,
-      role || user.role,
-      department_id !== undefined ? department_id : user.department_id,
+      nextUsername,
+      full_name ? String(full_name).trim() : user.full_name,
+      nextEmail,
+      nextRole,
+      department_id !== undefined ? (department_id || null) : user.department_id,
       allowedTabs ? JSON.stringify(allowedTabs) : user.allowed_tabs_json,
       only_own_department !== undefined ? (only_own_department ? 1 : 0) : user.only_own_department,
       can_view_financials !== undefined ? (can_view_financials ? 1 : 0) : user.can_view_financials,
       can_export !== undefined ? (can_export ? 1 : 0) : user.can_export,
-      can_edit !== undefined ? (can_edit ? 1 : 0) : user.can_edit,
+      nextCanEdit,
       is_active !== undefined ? (is_active ? 1 : 0) : user.is_active,
     ];
 
-    if (password && password.trim().length >= 6) {
-      const passwordHash = await hashPassword(password);
+    if (password && String(password).trim().length >= 4) {
+      const passwordHash = await hashPassword(String(password).trim());
       passwordClause = ', password_hash = ?';
       params.push(passwordHash);
     }
@@ -212,6 +238,7 @@ export async function PUT(request: NextRequest) {
 
     await run(
       `UPDATE users SET 
+        username = ?,
         full_name = ?, 
         email = ?, 
         role = ?, 
@@ -235,11 +262,11 @@ export async function PUT(request: NextRequest) {
       module: 'USUARIOS',
       entityId: id,
       entityName: user.full_name,
-      afterState: { role, department_id, allowedTabs, only_own_department, is_active },
-      reason: `Actualización de permisos para ${user.email}`,
+      afterState: { username: nextUsername, role: nextRole, department_id, allowedTabs, only_own_department, is_active },
+      reason: `Actualización de permisos para @${nextUsername}`,
     });
 
-    return NextResponse.json({ success: true, message: 'Permisos actualizados con éxito.' });
+    return NextResponse.json({ success: true, message: 'Permisos y credenciales actualizados con éxito.' });
   } catch (error: any) {
     console.error('Error updating user:', error);
     return NextResponse.json({ error: error.message || 'Error al actualizar usuario.' }, { status: 500 });
@@ -249,8 +276,8 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const currentUser = await getCurrentUser();
-    if (!currentUser || currentUser.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Solo el administrador puede eliminar usuarios.' }, { status: 403 });
+    if (!currentUser || (currentUser.role !== 'ADMIN' && !currentUser.canManageUsers)) {
+      return NextResponse.json({ error: 'Solo el administrador puede desactivar usuarios.' }, { status: 403 });
     }
 
     const { searchParams } = new URL(request.url);
@@ -260,16 +287,15 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
     }
 
-    const targetUser = await queryOne<any>('SELECT email, full_name FROM users WHERE id = ?', [id]);
+    const targetUser = await queryOne<any>('SELECT username, email, full_name FROM users WHERE id = ?', [id]);
     if (!targetUser) {
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 });
     }
 
-    if (targetUser.email === 'alexander7tm@gmail.com') {
-      return NextResponse.json({ error: 'El administrador principal alexander7tm@gmail.com no puede ser eliminado.' }, { status: 400 });
+    if (String(targetUser.username).toLowerCase() === 'turcosivar') {
+      return NextResponse.json({ error: 'El usuario principal @turcosivar no puede ser eliminado.' }, { status: 400 });
     }
 
-    // Soft delete para preservar integridad de bitácoras y movimientos
     await run('UPDATE users SET is_active = 0 WHERE id = ?', [id]);
 
     await logAudit({
@@ -279,7 +305,7 @@ export async function DELETE(request: NextRequest) {
       action: 'DESACTIVAR_USUARIO',
       module: 'USUARIOS',
       entityId: id,
-      entityName: `${targetUser.full_name} (${targetUser.email})`,
+      entityName: `${targetUser.full_name} (@${targetUser.username})`,
       reason: 'Desactivación de cuenta de usuario',
     });
 

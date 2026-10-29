@@ -29,6 +29,7 @@ interface SidebarProps {
   currentUser?: {
     role?: string;
     allowedTabs?: string[];
+    canManageUsers?: boolean;
     [key: string]: any;
   } | null;
   alertCounts?: {
@@ -43,7 +44,7 @@ export const allNavigationItems = [
   { name: 'Inventario físico', href: '/inventario', icon: Boxes, tabKey: 'INVENTARIO' },
   { name: 'Celulares y líneas', href: '/celulares', icon: Smartphone, tabKey: 'CELULARES' },
   { name: 'Categorías y productos', href: '/productos', icon: Layers, tabKey: 'PRODUCTOS' },
-  { name: 'Entradas y movimientos', href: '/movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS', adminOnly: true },
+  { name: 'Entradas y movimientos', href: '/movimientos', icon: ArrowLeftRight, tabKey: 'MOVIMIENTOS' },
   { name: 'Asignaciones a personal', href: '/asignaciones', icon: UserCheck, tabKey: 'ASIGNACIONES' },
   { name: 'Averías y mantenimiento', href: '/mantenimiento', icon: Wrench, tabKey: 'MANTENIMIENTO', badgeKey: 'brokenItems' },
   { name: 'Licencias y contratos', href: '/servicios-digitales', icon: Globe, tabKey: 'SERVICIOS', badgeKey: 'expiringServices' },
@@ -79,21 +80,19 @@ export default function Sidebar({
     return () => window.removeEventListener('storage', loadNames);
   }, [pathname]);
 
-  // Filtrado de pestañas según permisos del usuario (RBAC granular)
-  const userAllowedTabs = currentUser?.allowedTabs || [
-    'DASHBOARD', 'INVENTARIO', 'CELULARES', 'PRODUCTOS', 'MOVIMIENTOS',
-    'ASIGNACIONES', 'MANTENIMIENTO', 'SERVICIOS', 'COSTOS', 'REPORTES',
-    'DEPARTAMENTOS', 'USUARIOS', 'AUDITORIA', 'CONFIGURACION'
-  ];
+  // Filtrado estricto: cada usuario ve SOLO las pestañas autorizadas en sus permisos
+  const userAllowedTabs: string[] = Array.isArray(currentUser?.allowedTabs)
+    ? currentUser!.allowedTabs
+    : [];
 
   const visibleItems = allNavigationItems.filter((item) => {
-    if (item.adminOnly && currentUser?.role !== 'ADMIN') {
+    if (currentUser?.role === 'ADMIN') {
+      return true;
+    }
+    if (item.adminOnly && !currentUser?.canManageUsers && !userAllowedTabs.includes(item.tabKey)) {
       return false;
     }
-    if (currentUser?.role !== 'ADMIN' && !userAllowedTabs.includes(item.tabKey)) {
-      return false;
-    }
-    return true;
+    return userAllowedTabs.includes(item.tabKey);
   });
 
   return (
@@ -157,9 +156,9 @@ export default function Sidebar({
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4 text-sm font-medium">
           {visibleItems.map((item) => {
             const Icon = item.icon;
-            const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
+            const isActive = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
             const badgeCount = item.badgeKey ? (alertCounts as any)[item.badgeKey] : 0;
-            const displayLabel = customTabNames[item.href] || item.name;
+            const displayLabel = customTabNames[item.tabKey] || customTabNames[item.href] || item.name;
 
             return (
               <Link

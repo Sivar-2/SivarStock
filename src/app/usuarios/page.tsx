@@ -6,33 +6,27 @@ import {
   Shield,
   Search,
   Lock,
-  Mail,
-  Building,
-  Key,
   CheckCircle,
   XCircle,
-  Eye,
   SlidersHorizontal,
   UserPlus,
   Edit2,
   Trash2,
-  Check,
-  AlertCircle
 } from 'lucide-react';
 
 const ALL_SYSTEM_TABS = [
   { key: 'DASHBOARD', label: 'Inicio / Dashboard', desc: 'Métricas, KPIs y alertas generales' },
-  { key: 'INVENTARIO', label: 'Inventario Físico', desc: 'Equipos, computadoras e impresoras' },
-  { key: 'CELULARES', label: 'Celulares y Líneas', desc: 'Móviles corporativos, IMEIs y notas' },
-  { key: 'PRODUCTOS', label: 'Categorías y Productos', desc: 'Catálogo de consumibles y suministros' },
+  { key: 'INVENTARIO', label: 'Inventario Físico', desc: 'Equipos, computadoras, MAC, serie e impresoras' },
+  { key: 'CELULARES', label: 'Celulares y Líneas', desc: 'Móviles corporativos, IMEIs y vencimiento de contratos' },
+  { key: 'PRODUCTOS', label: 'Categorías y Productos', desc: 'Catálogo de productos, consumibles y suministros' },
   { key: 'MOVIMIENTOS', label: 'Entradas y Movimientos', desc: 'Kardex y registro de ingresos/salidas' },
-  { key: 'ASIGNACIONES', label: 'Asignaciones a Personal', desc: 'Custodios de activos y bajas laborales' },
+  { key: 'ASIGNACIONES', label: 'Asignaciones y Actas Digitales', desc: 'Custodios de activos y actas por WhatsApp' },
   { key: 'MANTENIMIENTO', label: 'Averías y Mantenimiento', desc: 'Gestión de fallas y sustituciones' },
-  { key: 'SERVICIOS', label: 'Licencias y Servicios', desc: 'Software, dominios y suscripciones' },
+  { key: 'SERVICIOS', label: 'Licencias y Contratos', desc: 'Software, proveedores, SLAs y suscripciones' },
   { key: 'COSTOS', label: 'Costos y Facturas', desc: 'Facturas, órdenes de compra y garantías' },
-  { key: 'REPORTES', label: 'Reportes y Métricas', desc: 'Exportación Excel/PDF y Looker Studio' },
-  { key: 'DEPARTAMENTOS', label: 'Áreas y Departamentos', desc: 'Estructura organizativa y traslados' },
-  { key: 'CONFIGURACION', label: 'Configuración', desc: 'Copias de seguridad, modo nocturno, QR' },
+  { key: 'REPORTES', label: 'Reportes y Métricas', desc: 'Exportación Excel/CSV y consultas dinámicas' },
+  { key: 'DEPARTAMENTOS', label: 'Áreas y Empleados', desc: 'Estructura organizativa, DPI, jefes y traslados' },
+  { key: 'CONFIGURACION', label: 'Configuración / Ajustes', desc: 'Firma digital, servidor LAN, respaldos y QR' },
 ];
 
 export default function UsuariosPage() {
@@ -43,7 +37,6 @@ export default function UsuariosPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState<any | null>(null);
 
-  // Form State
   const [formData, setFormData] = useState({
     username: '',
     full_name: '',
@@ -51,11 +44,12 @@ export default function UsuariosPage() {
     password: '',
     role: 'AREA_MANAGER',
     department_id: '',
-    allowedTabs: ['DASHBOARD', 'INVENTARIO', 'PRODUCTOS', 'ASIGNACIONES'],
+    allowedTabs: ['DASHBOARD', 'INVENTARIO', 'ASIGNACIONES'],
     only_own_department: false,
     can_view_financials: false,
     can_export: false,
     can_edit: true,
+    is_active: true,
   });
 
   const fetchUsers = () => {
@@ -85,11 +79,12 @@ export default function UsuariosPage() {
       password: '',
       role: 'AREA_MANAGER',
       department_id: departments[0]?.id || '',
-      allowedTabs: ['DASHBOARD', 'INVENTARIO', 'PRODUCTOS', 'ASIGNACIONES'],
+      allowedTabs: ['DASHBOARD', 'INVENTARIO', 'ASIGNACIONES'],
       only_own_department: true,
       can_view_financials: false,
       can_export: false,
       can_edit: true,
+      is_active: true,
     });
     setShowModal(true);
   };
@@ -99,15 +94,16 @@ export default function UsuariosPage() {
     setFormData({
       username: user.username,
       full_name: user.full_name,
-      email: user.email,
+      email: user.email || '',
       password: '',
       role: user.role,
       department_id: user.department_id || '',
-      allowedTabs: user.allowedTabs || [],
-      only_own_department: user.only_own_department,
-      can_view_financials: user.can_view_financials,
-      can_export: user.can_export,
-      can_edit: user.can_edit,
+      allowedTabs: Array.isArray(user.allowedTabs) ? user.allowedTabs : [],
+      only_own_department: Boolean(user.only_own_department),
+      can_view_financials: Boolean(user.can_view_financials),
+      can_export: Boolean(user.can_export),
+      can_edit: Boolean(user.can_edit),
+      is_active: user.is_active !== false,
     });
     setShowModal(true);
   };
@@ -126,6 +122,11 @@ export default function UsuariosPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (formData.role !== 'ADMIN' && formData.allowedTabs.length === 0) {
+      alert('Selecciona al menos una pestaña/módulo para que este usuario pueda ver al ingresar.');
+      return;
+    }
+
     try {
       const url = '/api/users';
       const method = editingUser ? 'PUT' : 'POST';
@@ -145,17 +146,20 @@ export default function UsuariosPage() {
 
       setShowModal(false);
       fetchUsers();
+      if (data.message) {
+        alert(data.message);
+      }
     } catch (err: any) {
       alert(err.message || 'Error de conexión');
     }
   };
 
   const handleDeactivate = async (user: any) => {
-    if (user.email === 'alexander7tm@gmail.com') {
-      alert('El administrador principal no puede ser desactivado.');
+    if (String(user.username).toLowerCase() === 'turcosivar') {
+      alert('El administrador principal @turcosivar no puede ser desactivado.');
       return;
     }
-    if (!confirm(`¿Estás seguro de desactivar la cuenta de ${user.full_name}?`)) return;
+    if (!confirm(`¿Estás seguro de desactivar la cuenta de ${user.full_name} (@${user.username})?`)) return;
 
     try {
       const res = await fetch(`/api/users?id=${user.id}`, { method: 'DELETE' });
@@ -193,7 +197,7 @@ export default function UsuariosPage() {
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Asigna qué pestañas específicas puede ver o modificar cada jefe, CEO o gerente, con restricción por departamento.
+            Crea usuarios adicionales y elige exactamente qué pestañas y permisos puede ver cada uno al iniciar sesión.
           </p>
         </div>
 
@@ -202,7 +206,7 @@ export default function UsuariosPage() {
           className="flex items-center justify-center gap-2 rounded-xl bg-military-800 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-military-900"
         >
           <UserPlus className="h-4 w-4" />
-          <span>+ Agregar Usuario / Jefe</span>
+          <span>+ Crear Nuevo Usuario</span>
         </button>
       </div>
 
@@ -211,40 +215,40 @@ export default function UsuariosPage() {
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 text-military-800 font-bold text-xs uppercase mb-1">
             <Shield className="h-4 w-4" />
-            <span>Super Administrador</span>
+            <span>Administrador Principal</span>
           </div>
           <p className="text-xs text-slate-500">
-            alexander7tm@gmail.com — Acceso irrestricto a auditoría, usuarios, costos y base de datos.
+            <strong>@turcosivar</strong> (Alexander Turcios Melendez) — Acceso total a todos los módulos y base de datos.
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 text-blue-700 font-bold text-xs uppercase mb-1">
             <Users className="h-4 w-4" />
-            <span>Jefaturas / Gerencia</span>
+            <span>Filtro por Departamento</span>
           </div>
           <p className="text-xs text-slate-500">
-            Restricción por departamento habilitable para que solo auditen a su propio personal.
+            Puedes restringir a un usuario para que solo vea los activos y empleados de su propio departamento.
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 text-emerald-700 font-bold text-xs uppercase mb-1">
             <SlidersHorizontal className="h-4 w-4" />
-            <span>Pestañas Selectivas</span>
+            <span>Pestañas Exclusivas</span>
           </div>
           <p className="text-xs text-slate-500">
-            Tú decides exactamente cuáles de las 12 secciones del sistema están visibles para cada cuenta.
+            Cuando el usuario inicia sesión, el menú lateral y las rutas bloquean todo lo que no le hayas marcado.
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-center gap-2 text-amber-700 font-bold text-xs uppercase mb-1">
             <Lock className="h-4 w-4" />
-            <span>Finanzas y Edición</span>
+            <span>Modo Solo Lectura o Edición</span>
           </div>
           <p className="text-xs text-slate-500">
-            Toggles dedicados para ocultar costos en Quetzales/Dólares o bloquear edición (Solo Lectura).
+            Decide si el usuario puede agregar/editar registros o si únicamente tiene permiso de consulta.
           </p>
         </div>
       </div>
@@ -255,7 +259,7 @@ export default function UsuariosPage() {
           <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar por nombre, usuario, correo, departamento o rol..."
+            placeholder="Buscar por nombre, usuario, departamento o rol..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-xs text-slate-800 focus:border-military-600 focus:bg-white focus:outline-none"
@@ -273,11 +277,10 @@ export default function UsuariosPage() {
             <thead className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase font-bold text-slate-500">
               <tr>
                 <th className="px-4 py-3">Usuario y Nombre</th>
-                <th className="px-4 py-3">Correo Electrónico</th>
                 <th className="px-4 py-3">Rol del Sistema</th>
                 <th className="px-4 py-3">Área Asignada</th>
                 <th className="px-4 py-3">Pestañas Habilitadas</th>
-                <th className="px-4 py-3">Restricciones</th>
+                <th className="px-4 py-3">Permisos Especiales</th>
                 <th className="px-4 py-3">Estado</th>
                 <th className="px-4 py-3 text-right">Acciones</th>
               </tr>
@@ -285,34 +288,31 @@ export default function UsuariosPage() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400">
+                  <td colSpan={7} className="py-8 text-center text-slate-400">
                     Cargando usuarios...
                   </td>
                 </tr>
               ) : filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400">
+                  <td colSpan={7} className="py-8 text-center text-slate-400">
                     No se encontraron usuarios que coincidan con la búsqueda.
                   </td>
                 </tr>
               ) : (
                 filteredUsers.map((u) => {
-                  const isSuperAdmin = u.email === 'alexander7tm@gmail.com';
+                  const isSuperAdmin = String(u.username).toLowerCase() === 'turcosivar';
                   return (
                     <tr key={u.id} className="hover:bg-slate-50 transition">
                       <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2.5">
                           <div className="h-8 w-8 rounded-full bg-military-800 text-white flex items-center justify-center font-bold text-xs shadow-xs">
                             {u.initials || 'U'}
                           </div>
                           <div>
                             <span className="font-bold text-slate-900 block">{u.full_name}</span>
-                            <span className="font-mono text-[11px] text-slate-500">@{u.username}</span>
+                            <span className="font-mono text-[11px] font-bold text-emerald-700">Usuario: {u.username}</span>
                           </div>
                         </div>
-                      </td>
-                      <td className="px-4 py-3.5 font-medium text-slate-600">
-                        {u.email}
                       </td>
                       <td className="px-4 py-3.5">
                         <span
@@ -328,7 +328,7 @@ export default function UsuariosPage() {
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
-                          {isSuperAdmin ? 'ADMINISTRADOR PRINCIPAL' : u.role}
+                          {isSuperAdmin ? 'ADMIN PRINCIPAL' : u.role}
                         </span>
                       </td>
                       <td className="px-4 py-3.5 font-medium text-slate-700">
@@ -339,13 +339,18 @@ export default function UsuariosPage() {
                         )}
                       </td>
                       <td className="px-4 py-3.5">
-                        {isSuperAdmin ? (
-                          <span className="text-[11px] font-bold text-purple-700">Todas las pestañas (12/12)</span>
+                        {u.role === 'ADMIN' ? (
+                          <span className="text-[11px] font-bold text-purple-700">Todas las pestañas</span>
                         ) : (
-                          <div className="flex items-center gap-1">
-                            <span className="rounded bg-slate-100 px-2 py-0.5 font-bold text-[11px] text-slate-700">
-                              {u.allowedTabs?.length || 0} de 12 pestañas
-                            </span>
+                          <div className="flex flex-wrap gap-1 max-w-xs">
+                            {(u.allowedTabs || []).map((t: string) => (
+                              <span
+                                key={t}
+                                className="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700"
+                              >
+                                {t}
+                              </span>
+                            ))}
                           </div>
                         )}
                       </td>
@@ -356,12 +361,11 @@ export default function UsuariosPage() {
                               Solo su departamento
                             </span>
                           )}
-                          {!u.can_view_financials && !isSuperAdmin && (
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-600 w-fit">
-                              Sin acceso a costos
+                          {u.can_edit || u.role === 'ADMIN' ? (
+                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-700 border border-emerald-200 w-fit">
+                              Puede editar
                             </span>
-                          )}
-                          {!u.can_edit && !isSuperAdmin && (
+                          ) : (
                             <span className="rounded bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-700 border border-blue-200 w-fit">
                               Solo lectura
                             </span>
@@ -384,7 +388,7 @@ export default function UsuariosPage() {
                           <button
                             onClick={() => openEditModal(u)}
                             className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 hover:text-military-800 transition"
-                            title="Editar permisos y pestañas"
+                            title="Editar permisos, usuario y contraseña"
                           >
                             <Edit2 className="h-3.5 w-3.5" />
                           </button>
@@ -411,14 +415,14 @@ export default function UsuariosPage() {
       {/* Modal de Creación / Edición de Usuario y Permisos */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="my-8 w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="my-8 w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900">
-                  {editingUser ? `Editar Permisos: ${editingUser.full_name}` : 'Crear Nuevo Usuario o Jefatura'}
+                  {editingUser ? `Editar Usuario y Permisos: ${editingUser.full_name}` : 'Crear Nuevo Usuario con Permisos Personalizados'}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Configura credenciales, rol y matriz de pestañas permitidas.
+                  El usuario ingresará en la pantalla de acceso con el Usuario y Contraseña que definas aquí, y verá únicamente las pestañas seleccionadas.
                 </p>
               </div>
               <button
@@ -444,27 +448,14 @@ export default function UsuariosPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700">Usuario (Login) *</label>
+                  <label className="block text-xs font-bold text-slate-700">Usuario para Iniciar Sesión *</label>
                   <input
                     type="text"
                     required
-                    disabled={Boolean(editingUser)}
                     value={formData.username}
-                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value.replace(/\s+/g, '').toLowerCase() })}
                     placeholder="Ej. cmendez"
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-military-600 focus:outline-none disabled:bg-slate-50"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700">Correo Electrónico *</label>
-                  <input
-                    type="email"
-                    required
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="cmendez@persiluz.com"
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-military-600 focus:outline-none"
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:border-military-600 focus:outline-none"
                   />
                 </div>
 
@@ -473,31 +464,49 @@ export default function UsuariosPage() {
                     {editingUser ? 'Nueva Contraseña (dejar en blanco para conservar)' : 'Contraseña de Acceso *'}
                   </label>
                   <input
-                    type="password"
+                    type="text"
                     required={!editingUser}
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    placeholder="Mínimo 6 caracteres"
+                    placeholder={editingUser ? 'Escribir solo si deseas cambiarla' : 'Ej. 123456'}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-mono text-slate-800 focus:border-military-600 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700">Correo Electrónico (Opcional)</label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    placeholder="usuario@empresa.com"
                     className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-military-600 focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700">Rol Institucional</label>
+                  <label className="block text-xs font-bold text-slate-700">Nivel de Rol</label>
                   <select
                     value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                    onChange={(e) => {
+                      const nextRole = e.target.value;
+                      setFormData({
+                        ...formData,
+                        role: nextRole,
+                        can_edit: nextRole === 'VIEWER' ? false : formData.can_edit,
+                      });
+                    }}
                     className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 focus:border-military-600 focus:outline-none"
                   >
-                    <option value="SUBADMIN">Subadministrador / Gerencia General</option>
-                    <option value="AREA_MANAGER">Jefe de Área / Responsable de Departamento</option>
-                    <option value="VIEWER">Usuario Consulta / Auditor</option>
-                    <option value="ADMIN">Administrador Completo</option>
+                    <option value="AREA_MANAGER">Personalizado / Jefe de Área (Ve solo pestañas marcadas)</option>
+                    <option value="SUBADMIN">Subadministrador / Gerencia (Ve solo pestañas marcadas)</option>
+                    <option value="VIEWER">Solo Consulta / Auditor (Sin permiso de editar)</option>
+                    <option value="ADMIN">Administrador Total (Ve todas las pestañas)</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700">Departamento de Pertenencia</label>
+                  <label className="block text-xs font-bold text-slate-700">Departamento Asignado</label>
                   <select
                     value={formData.department_id}
                     onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}
@@ -513,10 +522,10 @@ export default function UsuariosPage() {
                 </div>
               </div>
 
-              {/* Toggles de Restricción Poka-Yoke */}
+              {/* Toggles de Restricción */}
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                 <span className="block text-xs font-bold text-slate-800">
-                  Reglas de Seguridad y Restricciones
+                  Permisos de Acción dentro de sus Pestañas Autorizadas
                 </span>
 
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
@@ -527,7 +536,7 @@ export default function UsuariosPage() {
                       onChange={(e) => setFormData({ ...formData, only_own_department: e.target.checked })}
                       className="h-4 w-4 rounded border-slate-300 text-military-800 focus:ring-military-700"
                     />
-                    <span>Solo su departamento</span>
+                    <span>Ver solo su depto.</span>
                   </label>
 
                   <label className="flex items-center gap-2 p-2 rounded-lg bg-white border border-slate-200 text-xs font-medium text-slate-700 cursor-pointer">
@@ -537,17 +546,18 @@ export default function UsuariosPage() {
                       onChange={(e) => setFormData({ ...formData, can_view_financials: e.target.checked })}
                       className="h-4 w-4 rounded border-slate-300 text-military-800 focus:ring-military-700"
                     />
-                    <span>Ver costos y facturas</span>
+                    <span>Ver precios y costos</span>
                   </label>
 
                   <label className="flex items-center gap-2 p-2 rounded-lg bg-white border border-slate-200 text-xs font-medium text-slate-700 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={formData.can_edit}
+                      disabled={formData.role === 'VIEWER'}
+                      checked={formData.role === 'VIEWER' ? false : formData.can_edit}
                       onChange={(e) => setFormData({ ...formData, can_edit: e.target.checked })}
                       className="h-4 w-4 rounded border-slate-300 text-military-800 focus:ring-military-700"
                     />
-                    <span>Permitir edición / mutación</span>
+                    <span>Permitir agregar/editar</span>
                   </label>
                 </div>
               </div>
@@ -556,7 +566,7 @@ export default function UsuariosPage() {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="block text-xs font-bold text-slate-800">
-                    Pestañas del Sistema que Puede Ver ({formData.allowedTabs.length} seleccionadas)
+                    Pestañas que este Usuario Podrá Ver ({formData.allowedTabs.length} seleccionadas)
                   </span>
                   <div className="flex gap-2">
                     <button
@@ -569,19 +579,19 @@ export default function UsuariosPage() {
                     <span>•</span>
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, allowedTabs: ['DASHBOARD'] })}
+                      onClick={() => setFormData({ ...formData, allowedTabs: ['INVENTARIO'] })}
                       className="text-[11px] text-slate-500 font-medium hover:underline"
                     >
-                      Mínimo
+                      Solo Inventario
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 max-h-56 overflow-y-auto pr-1">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 max-h-60 overflow-y-auto pr-1">
                   {ALL_SYSTEM_TABS.map((tab) => {
                     const isChecked = formData.allowedTabs.includes(tab.key);
                     return (
-                      <label
+                      <div
                         key={tab.key}
                         onClick={() => handleToggleTab(tab.key)}
                         className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition ${
@@ -593,14 +603,14 @@ export default function UsuariosPage() {
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => {}} // handled by container
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-military-800 focus:ring-military-700"
+                          onChange={() => {}}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-military-800 focus:ring-military-700 pointer-events-none"
                         />
                         <div>
                           <span className="block text-xs font-bold text-slate-900">{tab.label}</span>
                           <span className="block text-[10px] text-slate-500">{tab.desc}</span>
                         </div>
-                      </label>
+                      </div>
                     );
                   })}
                 </div>
